@@ -50,10 +50,21 @@ class rdp_sender:
     def get_state(self):
         return self.state
 
+    #implement with the ugly code i have
     def open(self):
         self.state = "SYN"
         # Implement sending SYN packet
         # Start timeout timer
+    
+    def send(self, data):
+        # Implement sending data packet
+        pass
+
+    def close(self):
+        self.state = "FIN"
+        # Implement sending FIN packet
+        # Start timeout timer
+
 
     def check_timeout(self):
         if self.state != "closed":
@@ -144,7 +155,7 @@ def get_number(string):
 def packetize(data):
     packet_regex = r'\n'
     command_found = re.split(packet_regex, data)
-    #print("Command found", command_found)
+    print("Command found", command_found)
     correct_format= command_found[0].strip() in ["SYN", "DAT", "FIN"] and command_found is not None
     #print("Correct format", correct_format)
     if correct_format : #and command is not DAT
@@ -161,7 +172,7 @@ def packetize(data):
 
         if "DAT" in command_found : #special case
             instructions= data.split("\n")
-            #print("INSTRUCTIONS:", instructions , len(instructions))
+            #print("INSTRUCTIONS IN PACKETIZE:", instructions , len(instructions))
             if len(instructions) >= PACK_HEADER_MIN:
                 command, sequence, l, payload= instructions[0], instructions[1], instructions[2], instructions[3]
                 seq_no= get_number(sequence)
@@ -171,28 +182,26 @@ def packetize(data):
 
   
 def pack_and_send(udp_sock, data):
-    #with sender_lock:
-        #print("IS COMPLETE", is_complete(data))
         if data is not None : #and is_complete(data):
             #print("Data to be packetized", repr (data))
             p = packetize(data)
             string_p= str(p)
-            #print("Packetized data", p)
             #string_p= string_p.replace("\n", ";")
             #print("Sending packet....", string_p)
-
-            snd_buff.append(string_p)
-            udp_sock.sendto(string_p.encode(), echo_server)
-            return True
+            if packetize(data) is not None:
+                print("Sending packet....", string_p)
+                snd_buff.append(string_p)
+                udp_sock.sendto(string_p.encode(), echo_server)
 
 
 def unpack_and_ack(instructions, dp_sock):
     command, seq, length, payload= instructions[0], instructions[1], instructions[2], instructions[3]
-    p= packet(command, seq, length, payload)
-    print("Creating acknowledgment...... ")
+    seq_no= get_number(seq)
+    length= get_number(length)
+    p= packet(command, seq_no, length, payload)
+    print("Creating acknowledgment for...... ", command, seq, length, payload)
     ack_info = p.generate_ack()
     print("ACK INFO", ack_info)
-    #with sender_lock:
     dp_sock.sendto(ack_info.encode(), echo_server)
 
 
@@ -249,13 +258,17 @@ def driver(udp_sock):
                     packet_received= packet_received.decode().strip()
                     instructions= packet_received.split(";")
                     #print(instructions, len(instructions))
+                    if len(instructions)==1:
+                        instructions= packet_received.split("\n")
+                    
+                    print("Instructions......", instructions)
                     if packet_received is not None : #to meet the minimum length of a packet header 
                         if not packet_received.isnumeric(): #received ACK
                             if len(instructions) >= PACK_HEADER_MIN: #for SYN and FIN
                                 unpack_and_ack(instructions, udp_sock)
 
                     else: #for DAT
-                        #print("Instructions......", instructions)
+                        print("Instructions......", instructions)
                         instructions= packet_received.split("\n")
                         unpack_and_ack(instructions, udp_sock)
 
