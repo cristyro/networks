@@ -51,12 +51,11 @@ class rdp_sender:
     def get_state(self):
         return self.state
 
+    #implement with the ugly code i have
     def open(self):
         self.state = "SYN"
-        syn_packet = packet("SYN", 0, 0, 0)  # Create SYN packet
-        ack_info = syn_packet.generate_ack()  # Generate acknowledgment for SYN
-        print("SYN Packet with Acknowledgment:", syn_packet)
-        print("Acknowledgment for SYN:", ack_info)
+        # Implement sending SYN packet
+        # Start timeout timer
     
     def send(self, data):
         # Implement sending data packet
@@ -86,10 +85,8 @@ class packet:
 
     #Returns acknoledgment number and window size
     def generate_ack(self):
-        if self.command == "SYN":
-                return f"{self.sequence};{self.sequence + 1}"  # Acknowledgment number for SYN
-        else:
-            return f"{self.sequence};{WINDOW_SIZE - self.length}"
+        string = f"{self.sequence};{WINDOW_SIZE-self.length}"
+        return string
     
     def __reduce__(self):
         return (self.__class__, (self.command, self.sequence, self.length, self.payload))
@@ -107,7 +104,7 @@ class rdp_receiver:
 
     def rcv_data(self, udp_sock, data):
         global rcv_buff
-        print(".......\n")
+        #print(".......\n")
         data= data.decode() 
         pack_and_send(udp_sock, data)
         #receive ACK and handshake
@@ -115,14 +112,7 @@ class rdp_receiver:
             received, addr = udp_sock.recvfrom(1024)
             received= received.decode()
             received= received.strip()
-            if received.isnumeric(): #received ACK
-                rcv_buff.append(received)
-                ack, window= received.split(";")
-                print("ACK RECEIVED", ack, window)
-                #ack_dict[ack]= window              
-            else:
-                #received DAT pack
-                print("OTHER INFO", received)
+            if not received.isnumeric(): 
                 pack_and_send(udp_sock, received)
                
         except BlockingIOError:
@@ -158,9 +148,9 @@ def get_number(string):
 def packetize(data):
     packet_regex = r'\n'
     command_found = re.split(packet_regex, data)
-    print("Command found", command_found)
     correct_format= command_found[0].strip() in ["SYN", "DAT", "FIN"] and command_found is not None
-    #print("Correct format", correct_format)
+    print("Correct format", correct_format)
+    print("\n")
     if correct_format : #and command is not DAT
         if "DAT" not in command_found:
             instructions= data.split("\n")
@@ -175,7 +165,8 @@ def packetize(data):
 
         if "DAT" in command_found : #special case
             instructions= data.split("\n")
-            #print("INSTRUCTIONS IN PACKETIZE:", instructions , len(instructions))
+            print("INSTRUCTIONS IN PACKETIZE:", instructions , len(instructions))
+            print("\n")
             if len(instructions) >= PACK_HEADER_MIN:
                 command, sequence, l, payload= instructions[0], instructions[1], instructions[2], instructions[3]
                 seq_no= get_number(sequence)
@@ -194,9 +185,7 @@ def generate_data_packs(filename):
         for i in range(0, len(data), DAT_PACK_SIZE): #split the data into 1024 byte packs
             pack= data[i:i+DAT_PACK_SIZE] #get the next 1024 bytes
             data_packs.append(pack)
-            #print("PACK ",pack)
             pack_size_bytes = len(pack.encode())  # Calculate the size in bytes
-            #print(f"Packet {i // DAT_PACK_SIZE} size: {pack_size_bytes} bytes")
     #return data_packs
 
   
@@ -206,9 +195,8 @@ def pack_and_send(udp_sock, data):
         p = packetize(data)
         if p is not None:  # Check if packetization was successful
             string_p = str(p)
-            # print("Sending packet....", string_p)
             if packetize(data) is not None:
-                print("Sending packet....", string_p)
+                #print("Sending packet....", string_p)
                 #snd_buff.append(string_p)
                 #if p.sequence not in seq_dict:
                     #seq_dict[p.sequence]= p
@@ -236,8 +224,8 @@ def driver(udp_sock):
     global snd_buff, rcv_buff
     sender = rdp_sender()
     receiver = rdp_receiver()
-    timeout= 10
-    syn_sent= False
+    timeout = 10
+    syn_sent = False
 
     while sender.get_state() != "closed" or receiver.get_state() != "closed":
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], timeout)
@@ -245,48 +233,46 @@ def driver(udp_sock):
         if udp_sock in readable:
             data, conn = udp_sock.recvfrom(1024)
             receiver.rcv_data(udp_sock, data)
-               
-                
+
         if udp_sock in writable:
-            message= "SYN\nSequence:0\nLength:0\n\n"
-            next_message= "DAT\nSequence:1\nLength:22\nStart to send data\n\n"
-            
-            if not syn_sent:  # Send SYN packet only if not already sent
-                udp_sock.sendto(message.encode(), echo_server)  # Send SYN packet
-                syn_sent = True  # Update the flag indicating that SYN packet has been sent
-                
-            #RECEIVE SYN, send ACK this is receive data 
-            try:
-                    packet_received = udp_sock.recvfrom(1024)
-                    packet_received= packet_received[0]
-                    packet_received= packet_received.decode().strip()
-                    instructions= packet_received.split(";")
-                    if len(instructions)==1:
-                        instructions= packet_received.split("\n")
-                    
-                    if packet_received is not None : #SYN and FIN received here 
-                            if len(instructions) >= PACK_HEADER_MIN: 
-                               ack_info= unpack_and_ack(instructions, udp_sock)
-                               print("ACK INFO", ack_info)
+            if not syn_sent:
+                # Send SYN packet
+                syn_message = "SYN\nSequence:0\nLength:0\n\n"
+                udp_sock.sendto(syn_message.encode(), echo_server)
+                print("Sent SYN packet")
+                syn_sent = True
+            else:
+                # Send data packets
+                for data_pack in data_packs:
+                    udp_sock.sendto(data_pack.encode(), echo_server)
+                    print("Sent data packet:")
 
-                    else: #for DAT
-                        instructions= packet_received.split("\n")
-                        unpack_and_ack(instructions, udp_sock)
-                        print("ACK INFO FOR DAT", ack_info)
-           
-            except BlockingIOError:
-                print("No data received yet")
-                pass
-            #GET SYN and send ACK
-
-            if syn_sent:  # Send DAT packet only if SYN has been sent
+                # Wait for acknowledgment
                 try:
-                    udp_sock.sendto(next_message.encode(), echo_server)  # Send DAT packet
-
+                    print("Waiting for acknowledgment")
+                    ack_packet, addr = udp_sock.recvfrom(1024)
+                    ack_packet = ack_packet.decode().strip()
+                    print("Received acknowledgment:", ack_packet)
+                    # Process acknowledgment packet if needed
                 except BlockingIOError:
-                    print("No data received yet")
+                    print("No acknowledgment received yet")
                     pass
-                       
+
+                # End of data transmission, send FIN packet
+                fin_message = "FIN\nSequence:0\nLength:0\n\n"
+                udp_sock.sendto(fin_message.encode(), echo_server)
+                print("Sent FIN packet")
+
+                # Wait for acknowledgment for FIN packet
+                try:
+                    ack_packet, addr = udp_sock.recvfrom(1024)
+                    ack_packet = ack_packet.decode().strip()
+                    print("Received acknowledgment for FIN packet:")
+                    exit(0)
+                    # Process acknowledgment packet if needed
+                except BlockingIOError:
+                    print("No acknowledgment received for FIN packet yet")
+                    pass
 
         sender.check_timeout()
 
