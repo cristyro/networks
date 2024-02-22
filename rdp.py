@@ -102,22 +102,39 @@ class rdp_receiver:
         global rcv_buff
         self.state = ""
 
+class rdp_receiver:
+    def __init__(self):
+        global rcv_buff
+        self.state = ""
+
     def rcv_data(self, udp_sock, data):
         global rcv_buff
-        #print(".......\n")
+        print(".......\n")
         data= data.decode() 
+        print("Received data in rcv data 1:", data)
+        print("\n")
         pack_and_send(udp_sock, data)
         #receive ACK and handshake
         try:
             received, addr = udp_sock.recvfrom(1024)
+            print("Received data in rcv data 2:")
             received= received.decode()
             received= received.strip()
             if not received.isnumeric(): 
                 pack_and_send(udp_sock, received)
-               
+            else: #acknowledgment
+                print("Received acknowledgment:", received) 
+
+                # Generate and send acknowledgment for the received data packet
+                ack_packet = packet("ACK", int(received), 0, None)
+                ack_info = ack_packet.generate_ack()
+                print("Sending acknowledgment:", ack_info)
+                udp_sock.sendto(ack_info.encode(), addr)
+
         except BlockingIOError:
-                #print("No data received yet")
-                pass
+            #print("No data received yet")
+            pass
+
         
 def is_complete(data):
     lines= data.split("\n")
@@ -144,6 +161,21 @@ def get_number(string):
     return int_result
 
 
+
+
+#generae data packs from the file, all with 1024 bytes
+def generate_data_packs(filename):
+    global data_packs
+    with open(filename, "r") as file:
+        data= file.read()
+        data= data.strip()
+        #print("Data length", len(data))
+        for i in range(0, len(data), DAT_PACK_SIZE): #split the data into 1024 byte packs
+            pack= data[i:i+DAT_PACK_SIZE] #get the next 1024 bytes
+            data_packs.append(pack)
+            pack_size_bytes = len(pack.encode())  # Calculate the size in bytes
+    #return data_packs
+            
 #Return a packet object if the data is a valid packet
 def packetize(data):
     packet_regex = r'\n'
@@ -174,28 +206,18 @@ def packetize(data):
                 p = packet(command, seq_no, length, payload)
                 return p 
             
-
-#generae data packs from the file, all with 1024 bytes
-def generate_data_packs(filename):
-    global data_packs
-    with open(filename, "r") as file:
-        data= file.read()
-        data= data.strip()
-        #print("Data length", len(data))
-        for i in range(0, len(data), DAT_PACK_SIZE): #split the data into 1024 byte packs
-            pack= data[i:i+DAT_PACK_SIZE] #get the next 1024 bytes
-            data_packs.append(pack)
-            pack_size_bytes = len(pack.encode())  # Calculate the size in bytes
-    #return data_packs
-
   
 def pack_and_send(udp_sock, data):
     global snd_buff
     if data is not None:  # and is_complete(data):
         p = packetize(data)
+        print("PACKETIZED DATA:", p)
         if p is not None:  # Check if packetization was successful
             string_p = str(p)
             if packetize(data) is not None:
+                ack_info = p.generate_ack()
+                print("ACK INFO", ack_info)
+
                 #print("Sending packet....", string_p)
                 #snd_buff.append(string_p)
                 #if p.sequence not in seq_dict:
@@ -226,6 +248,7 @@ def driver(udp_sock):
     receiver = rdp_receiver()
     timeout = 10
     syn_sent = False
+    data_sent = False
 
     while sender.get_state() != "closed" or receiver.get_state() != "closed":
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], timeout)
@@ -241,21 +264,25 @@ def driver(udp_sock):
                 udp_sock.sendto(syn_message.encode(), echo_server)
                 print("Sent SYN packet")
                 syn_sent = True
-            else:
+            elif not data_sent:
                 # Send data packets
+                print("Sending data packets")
                 for data_pack in data_packs:
                     udp_sock.sendto(data_pack.encode(), echo_server)
-                    print("Sent data packet:")
+                    print("Sent data packet:", data_pack)
 
-                # Wait for acknowledgment
+                data_sent = True  # Mark that data has been sent
+                
+            else:
+                # Wait for acknowledgment for data packets
                 try:
-                    print("Waiting for acknowledgment")
+                    print("Waiting for acknowledgment for data packets")
                     ack_packet, addr = udp_sock.recvfrom(1024)
                     ack_packet = ack_packet.decode().strip()
-                    print("Received acknowledgment:", ack_packet)
+                    print("Received acknowledgment for data packet:", ack_packet)
                     # Process acknowledgment packet if needed
                 except BlockingIOError:
-                    print("No acknowledgment received yet")
+                    print("No acknowledgment received yet for data packets")
                     pass
 
                 # End of data transmission, send FIN packet
@@ -267,7 +294,7 @@ def driver(udp_sock):
                 try:
                     ack_packet, addr = udp_sock.recvfrom(1024)
                     ack_packet = ack_packet.decode().strip()
-                    print("Received acknowledgment for FIN packet:")
+                    print("Received acknowledgment for FIN packet:", ack_packet)
                     exit(0)
                     # Process acknowledgment packet if needed
                 except BlockingIOError:
