@@ -107,8 +107,8 @@ class rdp_sender:
             dat_packet = f"DAT\nSequence:{seq_number}\nLength:{len(data_pack)}\n{data_pack}"
             # Send DAT packet
             udp_sock.sendto(dat_packet.encode(), echo_server)
-            print("DEBUG SEQ NUMBER?", seq_number)
-            print("Sent DAT packet:", seq_number)
+            #print("DEBUG SEQ NUMBER?", seq_number)
+            #print("Sent DAT packet:", seq_number)
             self.seq_number = seq_number  # Update sequence number
         self.window_base += WINDOW_SIZE  # Move window base forward
 
@@ -118,7 +118,7 @@ class rdp_receiver:
         global rcv_buff
         self.state = ""
         self.expected_seq = 0
-        self.seq=0
+        self.prev_seq=0
         self.udp_sock = udp_sock
 
     def rcv_data(self, udp_sock, data):
@@ -129,13 +129,8 @@ class rdp_receiver:
         self.seq= seq
         print("SEQUENCE NUMBER", self.seq)
 
-
     def rcv_data(self, udp_sock, data):
-        global rcv_buff
-        self.state= ""
-
-        print(".......\n")
-        try:
+            global rcv_buff
             # Decode received data
             received = data.decode()
             print("Received data:", received)
@@ -149,10 +144,11 @@ class rdp_receiver:
             sequence = int(seq_str)
             payload_length_str = instructions[2].strip().split(":")[1]
             payload_length = int(payload_length_str)
+
             if command != "DAT":
                 if command == "SYN":
-                    self.expected_seq = 1
-                    ack_sequence = 1
+                    self.expected_seq = 0
+                    ack_sequence = 0
                     ack_packet = f"ACK\n{ack_sequence}"
                     print("Sending SYN ACK:", ack_packet)  # Print the ACK packet
                     udp_sock.sendto(ack_packet.encode(), echo_server)
@@ -163,24 +159,38 @@ class rdp_receiver:
                     self.expected_seq += 1
 
             else:
-                rdp_sender.send_next = sequence + payload_length  # update the next sequence number to be sent
+                print("IN DAT PACKET")
+                if not hasattr(self, 'first_sent') or not self.first_sent: # If the first packet is received, send the first ACK
+                    rdp_sender.send_next = 1
+                    ack_sequence = 1
+                    sequence= 1
+                    self.prev_seq=1
+                    self.expected_seq = 1
+                    print("IN FIRST ACK")
+                    print("Expected sequence number:", self.expected_seq, "Current sequence number:", sequence)
+                    ack_packet = f"ACK\n{ack_sequence}"
+                    print("Sending ACK: in FIRST SEND", ack_packet)
+                    self.first_sent = True
 
-            # Print DAT header
-            print("DAT Header - Sequence:", sequence)
+                else:
+                    self.expected_seq = self.prev_seq + payload_length
+                    ack_sequence = self.prev_seq + payload_length
+                    print("Expected sequence number:", self.expected_seq, "Current sequence number:", ack_sequence)
+                # Print DAT header
+                print("DAT Header - Sequence:", ack_sequence)
 
-            # Slide the window based on the received sequence number
-            if sequence == self.expected_seq:
-                self.expected_seq = sequence + payload_length +1
-                # Generate ACK for the received packet
-                ack_sequence = sequence + payload_length
-                ack_packet = f"ACK\n{ack_sequence}"
-                print("Sending ACK:", ack_packet)  # Print the ACK packet
-                udp_sock.sendto(ack_packet.encode(), echo_server)
-            else:
-                print("Out-of-order packet. Waiting for packet with sequence:", self.expected_seq)
-        except Exception as e:
-            print("Error while processing received data:")
-            #exit(1)
+                # Slide the window based on the received sequence number
+                if ack_sequence == self.expected_seq:
+                    print("Received in-order packet. Expected sequence vs current seq", self.expected_seq, sequence)
+                    print("\n")
+                    ack_packet = f"ACK\n{ack_sequence}"
+                    print("Sending ACK: in FIRST SEND", ack_packet)
+                    print("END......")
+                else:
+                    print("Out-of-order packet. Waiting for packet with sequence:", self.expected_seq)
+    
+            # exit(1)`
+
 
 def generate_data_packs(filename):
     global data_packs
