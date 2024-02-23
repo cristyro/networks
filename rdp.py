@@ -59,7 +59,7 @@ class packet:
         return (self.__class__, (self.command, self.sequence, self.length, self.payload))
         
     def __str__(self) -> str:
-        return f"{self.command}; {self.sequence}; {self.length}; {self.payload}"
+        return f"{self.command};{self.sequence};{self.length}; {self.payload}"
 
 
 class rdp_sender:
@@ -100,18 +100,15 @@ class rdp_sender:
             pass
 
     #dummy sequence number(sending index)
-    def send_window(self, udp_sock):
-        global snd_buff
-        for i in range(self.window_base, min(self.window_base + WINDOW_SIZE, len(data_packs))):
-            data_pack = data_packs[i]
-            # Construct DAT packet with sequence number (seq+length)
-            seq_number = self.seq_number + len(data_pack)
-            dat_packet = f"DAT\nSequence:{seq_number}\nLength:{len(data_pack)}\n{data_pack}"
-            # Send DAT packet
-            udp_sock.sendto(dat_packet.encode(), echo_server)
-            #print("Sent DAT packet:", seq_number)
-            self.seq_number = seq_number  # Update sequence number
-        self.window_base += WINDOW_SIZE  # Move window base forward
+    def send_data(self, udp_sock):
+    #Construct data packets
+        for i in range(len(data_packs)):
+            seq_number = i
+            length = len(data_packs[i])
+            dat_packet = f"DAT;Sequence:{seq_number};Length:{len(data_packs[i])};{data_packs[i]}"
+            dat_packet = dat_packet.encode()
+            print("Sending data packet:", dat_packet)
+            udp_sock.sendto(dat_packet, echo_server)
 
 
 class rdp_receiver:
@@ -136,75 +133,81 @@ class rdp_receiver:
     def rcv_data(self, udp_sock, data):
             global rcv_buff
             # Decode received data
-            received = data.decode()
+            received = data
+            print("Received:", received)
+            received= data.decode()
             if "ACK" not in received:
-                instructions = received.split("\n")
-                # Extract command, sequence, and payload length
-                command = instructions[0].strip()
-                seq_str = instructions[1].strip().split(":")[1]
-                sequence = int(seq_str)
-                payload_length_str = instructions[2].strip().split(":")[1] 
-                payload_length = int(payload_length_str)
-                if command != "DAT":
-                    if command == "SYN":
-                        self.expected_seq = 0
-                        ack_sequence = 0
-                        ack_packet = f"ACK\n{ack_sequence}"
-                        print("Sending SYN ACK:", ack_packet)  # Print the ACK packet
-                        udp_sock.sendto(ack_packet.encode(), echo_server)
-                        return 
-
-                    else: # If the command is FIN and check if its right sequence number
-                        print("Received FIN packet. Closing connection.")
-                        self.expected_seq += 1
-
-                else:
-                    payload = instructions[3]
-                    if self.window_available - payload_length >= 0: #sliding window is available
-                        print("IN DAT PACKET")
-                        if self.first: # If the first packet is received, send the first ACK
-                            rdp_sender.send_next = 1
-                            ack_sequence = 1
-                            sequence= 1
-                            self.prev_seq=1
-                            self.expected_seq = 1
-                            print("IN FIRST ACK")
-                            print("Expected sequence number:", self.expected_seq, "Current sequence number:", sequence)
-                            write_to_file(payload)
+                instructions = received.split(";")
+                print("INST")
+                print(instructions)
+                if len(instructions) >= PACK_HEADER_MIN:
+                    # Extract command, sequence, and payload length
+                    command = instructions[0].strip()
+                    seq_str = instructions[1].strip().split(":")[1] 
+                    sequence = int(seq_str)
+                    payload_length_str = instructions[2].strip().split(":")[1] 
+                    payload_length = int(payload_length_str)
+                    if command != "DAT":
+                        if command == "SYN":
+                            self.expected_seq = 0
+                            ack_sequence = 0
                             ack_packet = f"ACK\n{ack_sequence}"
-                            print("Sending ACK: in FIRST SEND", ack_packet)
-                            self.window_available += payload_length
-                            self.first= False
-                        else:
-                            print("AFTER first packet")
-                            self.expected_seq = self.prev_seq + payload_length
-                            ack_sequence = self.prev_seq + payload_length
-                            print("Expected sequence number:", self.expected_seq, "Current sequence number:", ack_sequence)
-                        
-                        # Print DAT header
-                        print("DAT Header - Sequence:", ack_sequence)
+                            print("Sending SYN ACK:", ack_packet)  # Print the ACK packet
+                            udp_sock.sendto(ack_packet.encode(), echo_server)
+                            return 
 
-                        # Slide the window based on the received sequence number
-                        if ack_sequence == self.expected_seq:
-                            print("Received in-order packet. ")
-                            print("\n")
-                            write_to_file(payload)
-                            ack_packet = f"ACK\n{ack_sequence}"
-                            print("Sending ACK: in FIRST SEND", ack_packet)
-                            self.window_available += payload_length
-                            print("END......")
-                            self.prev_seq = ack_sequence
+                        else: # If the command is FIN and check if its right sequence number
+                            print("Received FIN packet. Closing connection.")
+                            self.expected_seq += 1
+
+                    else:
+                        payload = instructions[3]
+                        if self.window_available - payload_length >= 0: #sliding window is available
+                            print("IN DAT PACKET")
+                            if self.first: # If the first packet is received, send the first ACK
+                                rdp_sender.send_next = 1
+                                ack_sequence = 1
+                                sequence= 1
+                                self.prev_seq=1
+                                self.expected_seq = 1
+                                print("IN FIRST ACK")
+                                print("Expected sequence number:", self.expected_seq, "Current sequence number:", sequence)
+                                write_to_file(payload)
+                                ack_packet = f"ACK\n{ack_sequence}"
+                                print("Sending ACK: in FIRST SEND", ack_packet)
+                                self.window_available += payload_length
+                                self.first= False
+                            else:
+                                print("AFTER first packet")
+                                self.expected_seq = self.prev_seq + payload_length
+                                ack_sequence = self.prev_seq + payload_length
+                                print("Expected sequence number:", self.expected_seq, "Current sequence number:", ack_sequence)
                             
-                        else:
-                            print("Out-of-order packet. Waiting for packet with sequence:", self.expected_seq)
-        
+                            # Print DAT header
+                            print("DAT Header - Sequence:", ack_sequence)
+
+                            # Slide the window based on the received sequence number
+                            if ack_sequence == self.expected_seq:
+                                print("Received in-order packet. ")
+                                print("\n")
+                                write_to_file(payload)
+                                ack_packet = f"ACK\n{ack_sequence}"
+                                print("Sending ACK: in FIRST SEND", ack_packet)
+                                self.window_available += payload_length
+                                print("END......")
+                                self.prev_seq = ack_sequence
+                                
+                            else:
+                                print("Out-of-order packet. Waiting for packet with sequence:", self.expected_seq)
+            
             # exit(1)
 
 # Write payload to file
 def write_to_file(payload):
     with open(outfile, "a") as file:
         file.write(payload)
-        print("Writing to file:")
+        #print('Payload:', payload)
+        print("Writing to file.....")
 
         
 
@@ -216,6 +219,9 @@ def generate_data_packs(filename):
         for i in range(0, len(data), DAT_PACK_SIZE):
             pack = data[i:i + DAT_PACK_SIZE]
             data_packs.append(pack)
+    
+
+
 
 def get_number(string):
     result= ""
@@ -251,19 +257,6 @@ def packetize(data):
                 return p
 
 
-def pack_and_send(udp_sock, data):
-    global snd_buff
-    if data is not None:  
-        p = packetize(data)
-        #print("PACKETIZED DATA:", p)
-        if p is not None:  
-            string_p = str(p)
-            if packetize(data) is not None:
-                ack_info = p.generate_ack()
-                #print("ACK INFO", ack_info)
-                udp_sock.sendto(string_p.encode(), echo_server)
-
-
 def driver(udp_sock):
     global snd_buff, rcv_buff
     sender = rdp_sender(udp_sock)
@@ -289,8 +282,9 @@ def driver(udp_sock):
                 syn_sent = True
             elif not data_sent:
                 print("HERE")
-                sender.send_window(udp_sock)
+                sender.send_data(udp_sock)
                 data_sent = True
+                print("Sent data packets.......")
 
         sender.check_timeout()
 
