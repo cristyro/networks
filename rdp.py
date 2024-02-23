@@ -159,8 +159,7 @@ class rdp_receiver:
                         self.expected_seq += 1
 
                 else:
-                    payload= instructions[2]
-                    print("PAYLOAD", payload)
+                    payload = instructions[3]
                     if self.window_available - payload_length >= 0: #sliding window is available
                         print("IN DAT PACKET")
                         if self.first: # If the first packet is received, send the first ACK
@@ -205,6 +204,7 @@ class rdp_receiver:
 def write_to_file(payload):
     with open(outfile, "a") as file:
         file.write(payload)
+        print("Writing to file:")
 
         
 
