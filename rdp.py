@@ -21,6 +21,7 @@ expected_seq= 0
 previous_seq= 0
 filename = None
 outfile = None
+terminate_connection = False
 echo_server = ("localhost", 8888)  # for local testing
 
 class udp_socket:
@@ -103,9 +104,8 @@ class rdp_sender:
     def close(self):
         self.state = "FIN" #for now, modify 
         fin_message = f"FIN<<<<Sequence:{last_sequence_number}<<<<Length:0"
+        self.log_sent_data("FIN", last_sequence_number, 0)
         self.udp_sock.sendto(fin_message.encode(), echo_server)
-        # Implement sending FIN packet
-        # Start timeout timer
 
     def log_ack(self, ack_number, window_sz):
         timestamp = datetime.now().strftime('%a %b %d %H:%M:%S %Z %Y')
@@ -119,13 +119,15 @@ class rdp_sender:
 
     def update_window(self, length_freed):
         global SLIDING_WINDOW
-        SLIDING_WINDOW += length_freed
+        while SLIDING_WINDOW <= (1024*5):
+            SLIDING_WINDOW += length_freed
 
 
     def process_ack(self, data):
         info  = data.split("<<<<")
+        print("Info", info)
         syn_received= [p for p in info if "SYN" in p]
-        dat_received= [p for p in info if "DAT" in p]
+        dat_received= [p for p in info if "DAT" in p] 
         fin_received= [p for p in info if "FIN" in p]
         
         if syn_received and self.state!= "SYN":
@@ -134,7 +136,8 @@ class rdp_sender:
         if dat_received:
             self.state = "DAT"
             self.update_window(int(info[2]))
-            self.log_ack(int(info[1], SLIDING_WINDOW))
+            print(info[1])
+            self.log_ack(info[1], SLIDING_WINDOW)
 
         if fin_received:
             self.state = "FIN"
@@ -148,7 +151,6 @@ class rdp_sender:
 
 
 
-
 class rdp_receiver:
     def __init__(self, udp_sock ):
         self.state = ""
@@ -158,8 +160,8 @@ class rdp_receiver:
     def rcv_data(self, udp_sock, data):
         self.state= ""
     
-    def set_seq(self, seq):
-        self.seq= seq
+    def get_state(self):
+        return self.state
 
     def stablish_connection(self, received):
         print(f"{datetime.now().strftime('%a %b %d %H:%M:%S %Z %Y')}: Receive; SYN; Sequence: 0; Length: 0")
@@ -168,6 +170,13 @@ class rdp_receiver:
         ack_packet = f"ACK:{ack_sequence}:{SLIDING_WINDOW}:SYN:0:0"
         print(f"{datetime.now().strftime('%a %b %d %H:%M:%S %Z %Y')}: Send; ACK; Acknowledgment: {ack_sequence}; Window: {SLIDING_WINDOW}")
         self.udp_sock.sendto(ack_packet.encode(), echo_server)
+
+    def terminate_connection(self, received):
+        self.state = "FIN"
+        received = received.split("<<<<")
+        sequence= get_number(received[1])
+        self.log_received_data("FIN", sequence, 0)
+        self.log_send_ack(sequence, SLIDING_WINDOW)
 
     def log_received_data(self, command, sequence, length):
         timestamp = datetime.now().strftime('%a %b %d %H:%M:%S %Z %Y')
@@ -184,12 +193,13 @@ class rdp_receiver:
             global all_acks
             global expected_seq, previous_seq
             global SLIDING_WINDOW
+            global terminate_connection
             ack_no = 0
             received = data
             if "SYN" in received and self.state!= "SYN":
                 self.stablish_connection(received)
             elif "FIN" in received:
-                print("implement FIN connection")
+                self.terminate_connection(received)
             if "DAT" in received:
                 instructions = received.split("<<<<")
                 #print("Instructions:\n", instructions)
@@ -221,7 +231,7 @@ class rdp_receiver:
                             all_acks.append(ack_packet)
                         if sequence == last_sequence_number:
                             print("Last packet received")
-                            exit(1)
+                            terminate_connection = True
 
 # Write payload to file
 def write_to_file(payload):
@@ -260,7 +270,7 @@ def driver(udp_sock):
     syn_sent = False
     packs_sent = []
 
-    while sender.get_state() != "closed" or receiver.get_state() != "closed":
+    while sender.get_state() != "FIN" or receiver.get_state() != "FIN":
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], timeout)
         for sock in readable:
             if sock is udp_sock:
@@ -273,8 +283,6 @@ def driver(udp_sock):
 
         if udp_sock in writable:
             if not syn_sent:
-                #syn_message = "SYN\nSequence:0\nLength:0\n\n"
-                #udp_sock.sendto(syn_message.encode(), echo_server)
                 sender.open()
                 syn_sent = True
             else: 
@@ -295,11 +303,10 @@ def driver(udp_sock):
                     ack_seq= int(a.split("<<<<")[1])
                     ack_window= int(a.split("<<<<")[2])
                     receiver.log_send_ack(ack_seq, ack_window)
-                
-                
-                #print("Sent FIN packet.......")
-    
 
+                if terminate_connection:
+                    sender.close()
+                    
         # Check timeout and other tasks
         sender.check_timeout()
 
