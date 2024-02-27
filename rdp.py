@@ -125,7 +125,6 @@ class rdp_sender:
 
     def process_ack(self, data):
         info  = data.split("<<<<")
-        print("Info", info)
         syn_received= [p for p in info if "SYN" in p]
         dat_received= [p for p in info if "DAT" in p] 
         fin_received= [p for p in info if "FIN" in p]
@@ -136,7 +135,6 @@ class rdp_sender:
         if dat_received:
             self.state = "DAT"
             self.update_window(int(info[2]))
-            print(info[1])
             self.log_ack(info[1], SLIDING_WINDOW)
 
         if fin_received:
@@ -218,7 +216,6 @@ class rdp_receiver:
                             self.first= False
                         else:
                             expected_seq = previous_seq + payload_length
-
                         if expected_seq == sequence:
                             write_to_file(payload)
                             ack_packet = f"ACK<<<<{sequence}<<<<{SLIDING_WINDOW}<<<<{command}<<<<{sequence}<<<<{payload_length}"
