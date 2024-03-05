@@ -7,6 +7,7 @@ import re
 import os
 from datetime import datetime
 import time
+#ADD 
 
 DAT_PACK_SIZE = 1024
 SLIDING_WINDOW = 1024*5
@@ -20,7 +21,10 @@ data_packs = []
 #for retransmission
 sent_packs= {}
 ack_count={}
+#for sliding window
+win={}
 
+syn_sent = False
 last_sequence_number = 0
 data_index=0
 expected_seq= 0
@@ -102,12 +106,12 @@ class rdp_sender:
             seq_no= info[1]
             sent_packs[seq_no]= time.time() #update time upon receiving ACK
             if int(seq_no) in ack_count and ack_count[int(seq_no)] >= 3:
-                #print(ack_count)
                 print("Reach here... needs to be checked ")
                 packet_retransmit= all_packets[int(seq_no)]
                 if packet_retransmit:
                     to_send.insert(0, packet_retransmit) #re-transmit by sending it in front 
                     return;     
+    
             #otherwise we are good to send
             self.update_window(int(info[2]))
             self.log_ack(info[1], SLIDING_WINDOW)
@@ -196,48 +200,56 @@ class rdp_receiver:
             global SLIDING_WINDOW
             global terminate_connection
             ack_no = 0
-            received = data
-            if "SYN" in received and self.state!= "SYN":
-                self.stablish_connection(received)
-            elif "FIN" in received:
-                print("RECEIVE FIN PACKET")
-                self.terminate_connection(received)
-            if "DAT" in received:
-                instructions = received.split("<<<<")
-                if len(instructions) >= PACK_HEADER_MIN:
-                    command = instructions[0].strip()
-                    seq_str = instructions[1]  #instructions[1].strip().split(":")[1]
-                    sequence = int(seq_str)
-                    payload_length_str = instructions[2]  #instructions[2].strip().split(":")[1]
-                    payload_length = int(payload_length_str)
-                    payload = instructions[3]
-                    #print("INSTRUCTIONS", instructions)
-                    #print("\n\n")
-                    if SLIDING_WINDOW - payload_length >= 0: #sliding window is available
-                        self.log_received_data(command, sequence, payload_length)
-                        if self.first: # If the first packet is received, send the first ACK
-                            previous_seq= 1
-                            expected_seq= 1
-                            self.first= False
-                        else:
-                            expected_seq = previous_seq + payload_length
-                        print("EXPECTED", expected_seq, "RECEIVED", sequence)
-                        if expected_seq == sequence:
-                            write_to_file(payload)
-                            ack_packet = f"ACK<<<<{sequence}<<<<{SLIDING_WINDOW}<<<<{command}<<<<{sequence}<<<<{payload_length}"
-                            all_acks.append(ack_packet)
-                            previous_seq = sequence # Update previous sequence
-                            #update ack_count for received seq_no
-                            ack_count[sequence]+=1
-                            print("ACK COUNT", ack_count)
-                        else:
-                            print("Packet out of order", "Expected sequence:", expected_seq, "Received sequence:", sequence)
-                            SLIDING_WINDOW-= payload_length
-                            ack_packet = f"ACK<<<<{sequence}<<<<{SLIDING_WINDOW}<<<<{command}<<<<{sequence}<<<<{payload_length}"
-                            all_acks.append(ack_packet)
-                        if sequence == last_sequence_number:
-                            print("Last packet received")
-                            terminate_connection = True
+            pattern = r"(?=(SYN|DAT|FIN))"
+            packets = re.split(pattern, data)
+            packets = [packet for packet in packets if packet.strip()] #remove empty strings
+            for received in packets:
+
+
+                if "SYN" in received and self.state!= "SYN":
+                    self.stablish_connection(received)
+                elif "FIN" in received:
+                    print("RECEIVE FIN PACKET")
+                    self.terminate_connection(received)
+                if "DAT" in received:
+                    instructions = received.split("<<<<")
+                    if len(instructions) >= PACK_HEADER_MIN:
+                        command = instructions[0].strip()
+                        seq_str = instructions[1]  #instructions[1].strip().split(":")[1]
+                        sequence = int(seq_str)
+                        payload_length_str = instructions[2]  #instructions[2].strip().split(":")[1]
+                        payload_length = int(payload_length_str)
+                        payload = instructions[3]
+                        #print("INSTRUCTIONS", instructions)
+                        #print("\n\n")
+                        if SLIDING_WINDOW - payload_length >= 0: #sliding window is available
+                            self.log_received_data(command, sequence, payload_length)
+                            if self.first: # If the first packet is received, send the first ACK
+                                previous_seq= 1
+                                expected_seq= 1
+                                self.first= False
+                            else:
+                                expected_seq = previous_seq + payload_length
+                            print("EXPECTED", expected_seq, "RECEIVED", sequence)
+                            if expected_seq == sequence:
+                                write_to_file(payload)
+                                #send next packet wanted?
+                                ack_packet = f"ACK<<<<{sequence}<<<<{SLIDING_WINDOW}<<<<{command}<<<<{sequence}<<<<{payload_length}"
+                                all_acks.append(ack_packet)
+                                previous_seq = sequence # Update previous sequence
+                                #update ack_count for received seq_no
+                                ack_count[sequence]+=1
+                                print("ACK COUNT", ack_count)
+                            else:
+                                print("Packet out of order", "Expected sequence:", expected_seq, "Received sequence:", sequence)
+                                ack_count[sequence]+=1 #look for retransmission
+                                SLIDING_WINDOW-= payload_length
+                                ack_packet = f"ACK<<<<{sequence}<<<<{SLIDING_WINDOW}<<<<{command}<<<<{sequence}<<<<{payload_length}"
+                                all_acks.append(ack_packet)
+
+                            if sequence == last_sequence_number:
+                                print("Last packet received")
+                                terminate_connection = True
 
 
 # Write payload to file
