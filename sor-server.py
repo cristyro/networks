@@ -60,6 +60,7 @@ class rdp:
         self.current_ack = 0
         self.expected_seq= 0
         self.first_packet= True 
+        self.finish= False
 
     def set_state(self, new_state):
         self.state= new_state
@@ -93,11 +94,10 @@ class rdp:
         exit(1) #replace for sending FIN
 
     def is_persitent(self, request):
-        if "Connection: Keep-alive" in request:
-            return True
-        else:
-            return False
-    
+        request= request.replace("\r\n", " ")
+        if "Connection:Keep-alive" not in request:
+            self.finish= "True"
+                    
     #todo:check format 
     def request_answ(self, result, request):
         global sucess_message
@@ -111,7 +111,7 @@ class rdp:
                 data= file.read()
                 sucess_message.setdefault(self.connection_id, {})[request]= data
                 sucess_req[self.connection_id]= request
-                answ= "HTTP/1.0 200 OK"+ "\r\n"+data
+                answ= "HTTP/1.0 200 OK"+ "\r\n"+"Content Length: "+str(len(data))+"\r\n\r\n"+data
             
         else:
             answ = "HTTP/1.0 404 Not Found"+ filename
@@ -128,9 +128,9 @@ class rdp:
         result = re.findall(str_format, request)
         if not result:
             answ= self.bad_request()
-
-        else:            
+        else: 
             answ= self.request_answ(result, request)
+            self.is_persitent(request)
         return answ
     
     # Helper to split and packet all the data according to specified payload length
@@ -141,23 +141,17 @@ class rdp:
         chars_to_add = min(remaining_space, len(data))  # Determine how many characters to add
         dat_string += data[:chars_to_add]  # Add characters to the buffer
         remaining_data = data[chars_to_add:]  # Save remaining data for next iteration
-        print("DAT STRING", dat_string, len(dat_string), "PAYLEN", payload_len)
 
-        
         if len(dat_string) == payload_len:
             # If the buffer reaches the payload length, create DAT packet and put it
             dat_packet = packet("DAT", 0, 0, dat_string)
-            print("DATA PACK 1 .....", dat_packet.command)
             self.put_dat(dat_packet)
             dat_string= "" #reset after putting it in the buffer
 
-        else: #could fit it !
-            #print("Little file")
+        else: #We were able to fit all the payload in a "small packet"
             dat_packet= packet("DAT", 0, 0, dat_string)
-            print("DATA PACK 2, little ", dat_packet)
             self.put_dat(dat_packet)
             dat_string= "" 
-
 
         if remaining_data:
             self.pack_data(remaining_data) #pack recursively 
@@ -233,9 +227,23 @@ class rdp:
 
         self.current_ack= int(client_paylen)+1 #acknowledge client's received packet
 
+    #checks if the info in the buffer is duplicated. 
+    #like DAT packets with the same payload or DAT with empty payload
+    def check_info_in_buffer(self):
+        global snd_buff
+        to_remove= []
+        for each in snd_buff[self.connection_id]:
+            if each.command== "DAT" and each.payload=="":
+                to_remove.append(each)
+
+        for item in to_remove:
+            snd_buff[self.connection_id].remove(item)
+
+    #will add a FIN packet 
+    #def check_if_last(self):
+
     
-
-
+    # ---- Helper that puts everything together to send a said packet to client--------
     #Constructs and populates the snd_buff with taylored server responses
     #Whenever possible send joint commands, and upon detecting last ack put DAT|FIN
     def generate_response(self):
@@ -255,14 +263,13 @@ class rdp:
 
             if p.command!= "DAT":
                 commands.append(p.command)
-            
+
             if p.command == "DAT" and first_dat:
                 first_dat= False
                 commands.append("DAT")
                 string_commands= self.to_string(commands)
                 new_pack= packet(string_commands, self.current_seq, self.current_ack, p.payload)
-                
-            
+    
             else:
                 if len(queue_msg)==0:  #if its the last send DAT|FIN
                      new_pack= packet("DAT|FIN", self.current_seq, self.current_ack, p.payload)
@@ -271,6 +278,9 @@ class rdp:
                     new_pack= packet("DAT", self.current_seq, self.current_ack, p.payload)
 
             self.put_dat(new_pack)
+        
+        self.check_info_in_buffer()
+        
 
         #------------------- Helpers for writable and sending data to client ---------------------
 
@@ -281,7 +291,7 @@ class rdp:
         retransmit_buff[self.connection_id]= {} #how to do it nested?
             
         #send only howver much fits on the window!!!!!
-        while len(info_to_send)>0: #remember to clear snd buff after all is done
+        while len(info_to_send) >0: #remember to clear snd buff after all is done
             msg= info_to_send.pop(0)
             seq_no = msg.seq_num
             retransmit_buff[self.connection_id][seq_no]= msg
