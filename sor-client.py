@@ -58,14 +58,15 @@ def write_http_request():
     global files_to_write
     file_pairs = [(args.file_pairs[i], args.file_pairs[i+1]) for i in range(0, len(args.file_pairs), 2)]
 
+    #get rid of the Connection:keep-alive from the request xwxw
     if len(file_pairs)>1:
         for read_file, write_file in file_pairs:
             files_to_write.append(write_file)
             request= "GET /"+read_file+" HTTP/1.0\r\nConnection:Keep-alive\r\n\r\n"
             get_requests.append(request)
             files_and_len[read_file]= 0
-            all_req.append(request)
-
+            all_req.append(write_file)
+            
     else:
         files_and_len[file_pairs[0][1]]= 0
         files_to_write.append(file_pairs[0][1])
@@ -101,7 +102,7 @@ class PayloadHandler:
 
         #Re-use for other function calls 
         self.files_and_data[self.current_file]= data
-        payload_acc=""
+        self.payload_acc=""
         self.expected_content_length= None
 
     def select_payload(self, string_with_command):
@@ -115,7 +116,6 @@ class PayloadHandler:
     def check_and_write(self):
         print("current length: ", len(self.payload_acc),  "WE expect total of :", self.expected_content_length, "\n\n")
         if self.expected_content_length is not None and len(self.payload_acc) == (self.expected_content_length) : #TODO figure were we lost the 1 
-            print("hereeeeee ")
             self.write_to_file(self.payload_acc) #In case we received extra data 
             self.expected_content_length= None #reset for next file 
 
@@ -128,6 +128,7 @@ class PayloadHandler:
         # Regular expression to find content length and initial part of the payload
         pattern = r"Content Length: (\d+)\r?\n\r?\n([\s\S]*)"
         matches = re.search(pattern, data)
+
         if matches:
             file_in_order= all_req.pop(0)
             self.set_file(file_in_order)
@@ -279,8 +280,9 @@ class rdp:
             self.current_ack= int(paylen)+1 #update our current if we get ack we want 
             
 
-    #TODO: in DAT manage wtf to do when payload is finally complete with the DAT commands sent
+    
     def process_data(self, data):
+        global snd_buff
         commands_found= self.parse_command(data)        
         nums_found = self.gather_info(data)
         found_seq= nums_found[0]
@@ -297,7 +299,12 @@ class rdp:
                 self.payload_manager.gather_payload(data)
             elif command=="FIN":
                 print("REceived a FIN??...")
-                self.set_state("fin-rcv")   
+                self.set_state("fin-rcv")
+                #send ACK for the Fin 
+                ack_for_fin= packet("ACK", self.current_seq, self.current_ack, " ")
+                snd_buff.append(ack_for_fin)
+                self.set_state("fin-sent") 
+                 
 
                 
             
@@ -305,8 +312,7 @@ def main_loop():
     global snd_buff, rcv_buff, rdp
     rdp_obj.open()
 
-    #print("Sender state: ", rdp.get_state())
-    while rdp_obj.get_state!= "closed":
+    while True:
         #print("In main loop")
         readable, writable, exceptional = select.select([sock], [sock], [])
         for s in readable:
@@ -316,12 +322,16 @@ def main_loop():
             if rdp_obj.in_accordance(data): #checks the seq no
                 #print("into processing data.....")
                 rdp_obj.process_data(data)
-        
 
         while snd_buff:
             msg=  str (snd_buff.pop(0)) 
             #print("SENDING.....", msg)
             sock.sendto(msg.encode(), (args.server_ip, args.server_udp_port))
+
+        if rdp_obj.get_state()=="fin-sent":
+            print("closing connection....")
+            sock.close()
+            break;
 
 
 
