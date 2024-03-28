@@ -81,6 +81,7 @@ class rdp:
         if snd_buff_data is None:
             snd_buff[self.connection_id]= [dat]
         else:
+            #print("ADDED data to snd buff", dat)
             snd_buff_data.append(dat)
             snd_buff[self.connection_id]= snd_buff_data
 
@@ -158,6 +159,7 @@ class rdp:
             dat_packet= packet("DAT", 0, 0, dat_string)
             self.put_dat(dat_packet)
             dat_string= "" 
+   
 
         if remaining_data:
             self.pack_data(remaining_data) #pack recursively 
@@ -165,7 +167,7 @@ class rdp:
 
     #Function were we extract each GET request provided and service it by calling helpers
     def gather_req(self, command):
-        #print("NEED TO SERVICE", command)
+        print("NEED TO SERVICE", command)
         patt= r'GET(?:.|\n)*?(?=GET|$)'
         matches= re.findall(patt, command) 
         for match in matches:
@@ -186,7 +188,6 @@ class rdp:
             print("Expected sequence number updated to:", self.expected_seq)
             # Update current sequence number 
             self.current_seq = int(seq)
-               
             print("Packet received in accordance with protocol.")
             return True
         else:
@@ -276,6 +277,7 @@ class rdp:
     #Constructs and populates the snd_buff with taylored server responses
     #Whenever possible send joint commands, and upon detecting last ack put DAT|FIN
     def generate_response(self):
+        print("IN GENERATE RESPONSE \n\n")
         global snd_buff
         global payload_len
         commands= []
@@ -303,43 +305,37 @@ class rdp:
                 commands.append("FIN")
 
             if (self.get_state()== "fin-rcv") and "DAT" in commands:
-                print("WHY AM I HERE?")
                 self.generate_nums(p.length, client_paylen)
                 new_pack= packet(self.to_string(commands), self.current_seq, self.current_ack, p.payload)
                 self.set_state("fin-sent")
                 self.put_dat(new_pack)
 
             if "DAT" in commands:
+                if not queue_msg: # if we reach the end
+                    commands.append("FIN")
                 self.generate_nums(p.length, client_paylen)
                 new_pack= packet(self.to_string(commands), self.current_seq, self.current_ack, p.payload)
                 self.put_dat(new_pack)
 
 
         #------------------- Helpers for writable and sending data to client ---------------------
-
+    """ 
     def send_data_to_client(self, addr):
         global snd_buff
         global retransmit_buff
         global send_more_data
         info_to_send= snd_buff[self.connection_id]
         retransmit_buff[self.connection_id]= {} #how to do it nested?
-        sending_data= True
-        while info_to_send and sending_data: #remember to clear snd buff after all is done
+        while info_to_send : #remember to clear snd buff after all is done
             msg= info_to_send.pop(0)
             seq_no = msg.seq_num
             retransmit_buff[self.connection_id][seq_no]= msg
             sock.sendto(str(msg).encode(), addr)
-            print("MESSAGE", str(msg), "IS syn in msg?", "SYN" in msg.command) 
             if ("SYN" in msg.command or "ACK" in msg.command):
-                print("only send this")
-                sending_data= False
-                send_more_data = True if len(info_to_send)>1 else False 
-                return False
-        return True
+                break; """
+                #send_more_data = True if len(info_to_send)>1 else False 
             
-        
-              
-
+                  
 def udp_sock_start(ip, port):
     global sock
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -349,7 +345,7 @@ def udp_sock_start(ip, port):
 
 
 def main_loop():
-    global snd_buff, rcv_buff
+    global snd_buff, rcv_buff, retransmit_buff
     global payload_len
     global clients
     global send_data
@@ -358,7 +354,7 @@ def main_loop():
 
     while True:
          # Select readable and writable sockets
-        readable, writable, exceptional = select.select([sock], [sock], [])
+        readable, writable, exceptional = select.select([sock], [sock], [sock], 100)
         for s in readable:
             data, addr = s.recvfrom(5000)
             port_no= addr[1] # Extract port number from address
@@ -375,15 +371,21 @@ def main_loop():
                 continue_parse= rdp_obj.parse_command(data) #Parse command from the packet
                 print("continue parse? or skip to sending", continue_parse)
                 if continue_parse:
+                    print("IN continue to parse")
                     rdp_obj.generate_response() #Generate an appropiate response
+                    print("GENERATED response", snd_buff[rdp_obj.connection_id])
        
-            # Process writable sockets and send data to clients
-            
-            for client_id in clients:
-                print("HERE in start loop", send_data)
-                if send_data and clients[client_id] !=[]:
-                    rdp_obj= clients[client_id]
-                    send_data= rdp_obj.send_data_to_client(addr) # Send data to the client 
+            # Send data to clients
+            info_to_send= snd_buff[rdp_obj.connection_id]
+            retransmit_buff[rdp_obj.connection_id]= {} #how to do it nested?
+            while info_to_send : #remember to clear snd buff after all is done
+                msg= info_to_send.pop(0)
+                print("SENDING....", msg)
+                seq_no = msg.seq_num
+                retransmit_buff[rdp_obj.connection_id][seq_no]= msg
+                sock.sendto(str(msg).encode(), addr)
+                if ("SYN" in msg.command or "ACK" in msg.command):
+                    break; 
 
 
 if __name__== "__main__":
