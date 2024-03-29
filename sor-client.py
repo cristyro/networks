@@ -197,21 +197,47 @@ class rdp:
         global command
         snd_buff= []
 
+
+    def to_reset(self, seq) -> bool:
+        seq_num = int(seq)
+        # Check if the sequence number is within a reasonable range of expected_seq
+        # This includes both a bit ahead of expected_seq and a bit behind, to accommodate reordering or retransmission
+        if self.expected_seq - window_size <= seq_num <= self.expected_seq + window_size:
+            # If within range, then no need to send RST
+            print("within acceptable range")
+            return False
+        else:
+            # If outside this range, it may indicate an error or unexpected behavior, thus RST is considered
+            print("sending reset")
+            return True
+
+    
+    def send_rst(self):
+        global snd_buff
+        snd_buff=[]
+        rst_packet= packet("RST", self.current_seq, self.current_ack, " ")
+        self.put_dat(rst_packet)
+        self.set_state("rst_mode")
+
  
     #checks if the seq no is the one we expect!
     def in_accordance(self, command) -> bool:
         check_expected= 0
         seq, ack, client_paylen = self.gather_info(command)
-        check_expected= int(self.current_seq) + int(client_paylen)
-        if check_expected == int(seq):
-            self.expected_seq = int(seq) + int(client_paylen)
-            # Update current sequence number 
-            self.change_current_seq(seq)
-            print("Packet received in accordance with protocol.")
-            return True
-        else:
-            print("Packet not in accordance with protocol. Expected sequence:", self.expected_seq)
+        if self.to_reset(seq):
+            self.send_rst()
             return False
+        else:
+            check_expected= int(self.current_seq) + int(client_paylen)
+            if check_expected == int(seq):
+                self.expected_seq = int(seq) + int(client_paylen)
+                # Update current sequence number 
+                self.change_current_seq(seq)
+                print("Packet received in accordance with protocol.")
+                return True
+            else:
+                print("Packet not in accordance with protocol. Expected sequence:", self.expected_seq)
+                return False
         
     def send_first(self, msg):
         global snd_buff
@@ -324,11 +350,11 @@ def main_loop():
                 rdp_obj.process_data(data)
 
         while snd_buff:
-            msg=  str (snd_buff.pop(0)) 
+            msg= str (snd_buff.pop(0)) 
             #print("SENDING.....", msg)
             sock.sendto(msg.encode(), (args.server_ip, args.server_udp_port))
 
-        if rdp_obj.get_state()=="fin-sent":
+        if rdp_obj.get_state()=="fin-sent" or rdp_obj.get_state == "rst_mode":
             print("closing connection....")
             sock.close()
             break;
