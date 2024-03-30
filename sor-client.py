@@ -97,6 +97,7 @@ class PayloadHandler:
     #writes data to specific file and resets necessary variables
     def write_to_file(self, data):
         print("writing to", self.current_file)
+
         with open(self.current_file, 'w') as file:
             file.write(data)
 
@@ -108,13 +109,13 @@ class PayloadHandler:
     def select_payload(self, string_with_command):
         pattern = r"Payload:(?:\s)?(.*)"
         match_payload = re.search(pattern, string_with_command, re.DOTALL)
-        print("match payload?", match_payload)
+        #print("match payload?", match_payload)
         if match_payload:
             pay_wanted= match_payload.group(1)
             return pay_wanted
 
     def check_and_write(self):
-        print("current length: ", len(self.payload_acc),  "WE expect total of :", self.expected_content_length, "\n\n")
+        #print("current length: ", len(self.payload_acc),  "WE expect total of :", self.expected_content_length, "\n\n")
         if self.expected_content_length is not None and len(self.payload_acc) == (self.expected_content_length) : #TODO figure were we lost the 1 
             self.write_to_file(self.payload_acc) #In case we received extra data 
             self.expected_content_length= None #reset for next file 
@@ -134,7 +135,7 @@ class PayloadHandler:
             self.set_file(file_in_order)
             # Extract content length and initial payload from the data
             content_len_str, initial_payload = matches.groups()
-            print("initial payload", initial_payload, "\n\n........")
+            #print("initial payload", initial_payload, "\n\n........")
             content_len = int(content_len_str)
             self.expected_content_length = content_len  # Set the expected content length
             self.payload_acc+= initial_payload #Add initial payload to accumulator
@@ -144,7 +145,7 @@ class PayloadHandler:
                 self.have_sent_first= True #change to True once sent first ACK
         else: 
             pay_wanted= self.select_payload(data)         
-            print("adding to acc", repr(pay_wanted), "\n\n......")
+            #print("adding to acc", repr(pay_wanted), "\n\n......")
             #keep accumulating data for the payload
             self.payload_acc+= pay_wanted
             #Check if we have reached content length 
@@ -175,10 +176,11 @@ class rdp:
         self.current_ack=0
         self.expected_seq= 0 
         self.sent_data= 0
+        self.window =[] #keeps track of sent but unacked packets
         self.payload_manager= PayloadHandler(self) #Pass our instance for inheritance 
 
     def change_current_seq(self, new_val):
-        #print("CHANGE FROM: ", self.current_seq ,"to ",new_val , "\n")
+        print("CHANGE FROM: ", self.current_seq ,"to ",new_val , "\n")
         self.current_seq= new_val
 
     def set_state(self, new_state):
@@ -219,25 +221,30 @@ class rdp:
         self.put_dat(rst_packet)
         self.set_state("rst_mode")
 
+
  
-    #checks if the seq no is the one we expect!
     def in_accordance(self, command) -> bool:
         check_expected= 0
         seq, ack, client_paylen = self.gather_info(command)
+        print("command", command[0:55])
         if self.to_reset(seq):
             self.send_rst()
             return False
         else:
             check_expected= int(self.current_seq) + int(client_paylen)
+            check_expected = int(check_expected)
+            print("expect:", check_expected, "got", seq)
             if check_expected == int(seq):
                 self.expected_seq = int(seq) + int(client_paylen)
                 # Update current sequence number 
-                self.change_current_seq(seq)
-                print("Packet received in accordance with protocol.")
+                self.current_seq= check_expected
+                print(" **************************************")
                 return True
             else:
+                print("ccccccccccc------cccccccc")
                 print("Packet not in accordance with protocol. Expected sequence:", self.expected_seq)
                 return False
+           
         
     def send_first(self, msg):
         global snd_buff
@@ -297,37 +304,61 @@ class rdp:
         flattened= [command.decode() for command_tuple in matches for command in command_tuple]
         return flattened 
     
+    def can_send_pack(self,pack_len):
+        global window_size
+        measurement= window_size - pack_len
+        return measurement >= 0
+    
+    #Here we release. Put everything but the first SYN to start connection
+    def release_packets(self):
+        while self.window !=[] and self.can_send_pack(self.window[0].length):
+            next_packet= self.window.pop(0) #Gets the next inmediate packet to send
+            updated_packet = packet(next_packet.command, self.current_seq, self.current_ack, next_packet.payload)
+            if self.window:
+                peek= self.window[0]
+                self.current_seq += peek.length  #peek next
+            snd_buff.append(updated_packet)
 
     def manage_acks(self, found_ack, paylen):
+        #updates initial state of syn received to connect state upon receiving initial client handshake
         expected_ack = self.current_ack+ self.sent_data
         if expected_ack==int(found_ack):
             if self.get_state()=="syn-rcv":
                 self.set_state("connect")
             self.current_ack= int(paylen)+1 #update our current if we get ack we want 
-            
 
+        else:
+            self.release_packets()
+            #removes all the packets from the sliding window once they have been acked
+            self.window = [p for p in self.window if p.seq_num > int(found_ack)]
+            print("after acks , we have", len(self.window))
+            self.current_ack = max (found_ack, self.change_current_seq) # this is what we found has been last acknowledge on the other side 
+            
     
     def process_data(self, data):
         global snd_buff
         commands_found= self.parse_command(data)        
         nums_found = self.gather_info(data)
-        found_seq= nums_found[0]
-        found_ack = nums_found[1]
-        found_paylen= nums_found[2]
+        found_seq= int (nums_found[0])
+        found_ack =int (nums_found[1])
+        found_paylen= int (nums_found[2])
         for command in commands_found:
             #print("COMMAND?", command, "\n\n")
             if command== "SYN":
                 self.set_state("syn-rcv")
+                #here 
             elif command == "ACK":
                 self.manage_acks(found_ack, found_paylen)
             elif command=="DAT":
                 #call instance of PayloadManager
                 self.payload_manager.gather_payload(data)
             elif command=="FIN":
-                print("REceived a FIN??...")
                 self.set_state("fin-rcv")
                 #send ACK for the Fin 
-                ack_for_fin= packet("ACK", self.current_seq, self.current_ack, " ")
+                self.current_ack=found_seq #acknowledge all packets up untill this seq no
+                print('current seq :', self.current_seq,  "\n\n......")
+                ack_for_fin= packet("ACK", self.current_seq, self.current_ack, "")
+                print("acknowledgment for last packet has:", str (ack_for_fin) )
                 snd_buff.append(ack_for_fin)
                 self.set_state("fin-sent") 
                  
@@ -368,7 +399,3 @@ if __name__== "__main__":
     udp_sock_start(args.server_ip, args.server_udp_port)
     print("Client started")
     main_loop()
-
-
-
-
