@@ -377,8 +377,6 @@ class rdp:
                 snd_buff.append(ack_for_fin)
                 self.set_state("fin-sent") 
                  
-
-                
             
 def main_loop():
     global snd_buff, rcv_buff, rdp
