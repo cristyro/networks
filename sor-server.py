@@ -127,27 +127,31 @@ class rdp:
         global snd_buff
         dat_string = data
         while data:
-            chars_to_add = min(payload_len, len (dat_string) )  # Determine the amount of data to add to this packet
-            print("LEN of data",len(data), "len of dat_String")
+            chars_to_add = min(payload_len, len (data) )  # Determine the amount of data to add to this packet
+            print("LEN of data",len(data), "len of dat_String", len(dat_string))
             print("\n")
             dat_string = data[:chars_to_add]  # Extract the data for this packet
+            print("dat string: ", dat_string)
             data = data[chars_to_add:]  # Update the remaining data
-
             # Create and handle the packet with dat_string
             dat_packet = packet("DAT", self.current_seq, 0, dat_string, self.win_available)
             print(f"Created DAT packet with seq_num: {self.current_seq}, Payload length: {len(dat_string)}")
 
             if is_first_packet:
+                dat_packet = packet("DAT", 0, 0, dat_string, self.win_available)
+                self.current_seq += len (dat_string)
                 snd_buff[self.connection_id].append(dat_packet)
                 is_first_packet = False
             else:
                 self.put_dat(dat_packet)
+                self.current_seq += len (dat_string)
 
             # Update the sequence number by the amount of data added to this packet
-            print("MOTHER FUCKING BITCH chars to add", chars_to_add)
-            self.current_seq += len (data)
-            print(f"After fucking updating;", {self.current_seq})
+            print("Chars to add", chars_to_add)
+            print(f"After updating;", {self.current_seq})
             print("\n\n .....................\n\n")
+
+
 
     #Function were we extract each GET request provided and service it by calling helpers
     def gather_req(self, command):
@@ -254,7 +258,6 @@ class rdp:
         #Send True if I reach non-zero
     def can_send_pack(self, packet_len): #peek next packet len
         measure_win = self.win_available - packet_len
-        print("AVAILABLE", self.win_available, "VS PACK LEN", packet_len, "\n\n----------------")
         if (measure_win>=0):
             self.win_available -= packet_len
             return True 
@@ -266,8 +269,6 @@ class rdp:
     def release_packets(self):
         #where window is a list of packets sorted with their seq no
         print("in release ......\n")
-        print("In our window we have: ", len (self.window) )
-        print("FIRST item in window length :", self.window[0]. length, "Whats inside?", self.window)
         while self.window!=[] and self.can_send_pack((self.window[0]).length): 
                 next_packet= self.window.pop(0) #Gets the next inmediate packet to send
                 updated_packet = packet(next_packet.command, next_packet.seq_num, next_packet.ack_num, next_packet.payload, self.win_available)
@@ -304,19 +305,15 @@ class rdp:
         
         else: #Send as many packets as we can
             #updating own window capacity
-            print("own capacity before update: ", self.win_available)
-            print("received ack is:", received_ack)
             if self.window:
                 if self.win_available <= self.window[0].length :
                     missing= received_ack - self.current_ack
-                    print("adding ", missing,  " to window")
                     self.win_available += missing
                 self.current_ack = received_ack
                 print("win has now ...." ,self.win_available, "\n\n ----------000000---------\n\n")
                 self.release_packets()
                 print ("\n----------------------------\n")
                 self.update_window()
-                print("now left with after releasing :", len (self.window) )
                 self.expected_seq = max (self.expected_seq, self.current_ack) #update? see if causes no problems
                 #print("expected is now, updated in process_ack ", self.expected_seq)
                 self.set_state("connect")
@@ -386,23 +383,23 @@ class rdp:
                 first_dat = False
             
             elif self.get_state()== "fin-rcv" : #maybe add other conditions?
+                print("here $3")
                 commands.append("FIN")
 
             if (self.get_state()== "fin-rcv") and "DAT" in commands:
                 print("HERE $4")
                 self.generate_nums(p.length, client_paylen)
-                new_pack= packet(self.to_string(commands), self.current_seq, self.current_ack, p.payload, self.win_available)
+                new_pack= packet(self.to_string(commands), p.seq_no, self.current_ack, p.payload, self.win_available)
                 self.set_state("fin-sent")
                 snd_buff[self.connection_id].append(new_pack)
 
             if "DAT" in commands:
                 if not queue_msg and not self.win_available: # if we reach the end
                     print("HERE  $5 ?........................")
-                    #print("Appending it here at the end-----")
                     commands.append("FIN")
                     self.set_state("fin-sent")
                 self.generate_nums(p.length, client_paylen)
-                new_pack= packet(self.to_string(commands), self.current_seq, self.current_ack, p.payload, self.win_available)
+                new_pack= packet(self.to_string(commands), p.seq_num, self.current_ack, p.payload, self.win_available)
                 snd_buff[self.connection_id].append(new_pack)
 
 
@@ -443,7 +440,7 @@ def main_loop():
         for s in readable:
             data, addr = s.recvfrom(5000)
             port_no= addr[1] 
-            print("Received ", data.decode())
+            #print("Received ", data.decode())
 
             # If the client is new, initialize RDP object
             if not port_no in clients:
@@ -476,4 +473,5 @@ def main_loop():
 if __name__== "__main__":
     ip, port , window_size, payload_len = sys.argv[1], int(float (sys.argv[2])), int(sys.argv[3]), int(sys.argv[4])
     udp_sock_start(ip, port)
+
     main_loop()
