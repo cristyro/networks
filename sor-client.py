@@ -109,7 +109,6 @@ class PayloadHandler:
     def select_payload(self, string_with_command):
         pattern =  r"^(.*?)(?=,\s*Window:)"
         match_payload = re.search(pattern, string_with_command, re.DOTALL)
-        print("match payload:", match_payload)
         if match_payload:
             print(match_payload)
             pay_wanted= match_payload.group(1)
@@ -127,7 +126,6 @@ class PayloadHandler:
         global all_req
         global usual_length
         print("in gather payload\n\n.......")
-        data= data.decode()
         # Regular expression to find content length and initial part of the payload
         pattern = r"Content Length: (\d+)\r?\n\r?\n([\s\S]*)"
         matches = re.search(pattern, data)
@@ -216,6 +214,7 @@ class rdp:
         else:
             # If outside this range, it may indicate an error or unexpected behavior, thus RST is considered
             print("sending reset, you are fucked ")
+            exit(1)
             return True
 
     
@@ -235,13 +234,12 @@ class rdp:
             self.send_rst()
             return False
         else:
-            check_expected= int(self.current_seq) + int(client_paylen)
-            check_expected = int(check_expected)
-            print("expect:", check_expected, "got", seq)
-            if check_expected == int(seq):
+            if "SYN" in command:
+                self.current_seq =0
+            if self.current_seq == int(seq):
                 self.expected_seq = int(seq) + int(client_paylen)
                 # Update current sequence number 
-                self.current_seq= check_expected
+                self.current_seq+=int(client_paylen)
                 self.last_received= seq
                 print(" **************************************")
                 return True
@@ -296,7 +294,6 @@ class rdp:
     #append to commands
     def parse_command(self, command):
         continue_parsing= True
-        command= command.decode()
         pattern= r'\b([A-Z]+)\b'
         matches= re.findall(pattern, command) #finds all the commands in the string. 
         relevant_matches= [match for match in matches if match in ['SYN', 'DAT', 'ACK', 'FIN']]
@@ -304,7 +301,6 @@ class rdp:
          
     #Gathers and parses Sequence numbers,ack numbers and payload length 
     def gather_info(self, data):
-        data = data.decode()
         pattern = r"Seq:\s*(-?\d+).*?Ack:\s*(-?\d+).*?Length:\s*(\d+).*?"
         matches = re.findall(pattern, data)
         window_pattern = re.compile(r"Window:\s*(\d+)")
@@ -399,7 +395,8 @@ def main_loop():
         readable, writable, exceptional = select.select([sock], [sock], [])
         for s in readable:
             data, addr = sock.recvfrom(5000)
-            print("Received ", data.decode() , "\n\n\n....................\n")
+            data = data.decode()
+            print("Received ", data , "\n\n\n....................\n")
             rcv_buff.append(data)
             if rdp_obj.in_accordance(data): #checks the seq no
                 #print("into processing data.....")
@@ -424,7 +421,3 @@ if __name__== "__main__":
     udp_sock_start(args.server_ip, args.server_udp_port)
     print("Client started")
     main_loop()
-
-
-
-
