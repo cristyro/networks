@@ -284,7 +284,7 @@ class rdp:
         
         self.window =[]
         self.window = updated_list
-        print("Updated length is :", len (self.window) , "\n\n")
+        print("Updated length is :", self.win_available , "\n\n")
     
 
     #Only here if we have an ACK
@@ -308,13 +308,13 @@ class rdp:
                 if self.win_available <= self.window[0].length :
                     missing= received_ack - self.current_ack
                     self.win_available += missing
+
                 self.current_ack = received_ack
-                print("win has now ...." ,self.win_available, "\n\n ----------000000---------\n\n")
+                print("updating my ack to ," , self.current_ack)
                 self.release_packets()
                 print ("\n----------------------------\n")
                 self.update_window()
                 self.expected_seq = max (self.expected_seq, self.current_ack) #update? see if causes no problems
-                #print("expected is now, updated in process_ack ", self.expected_seq)
                 self.set_state("connect")
             else:
                 self.terminate_conn()
@@ -461,6 +461,8 @@ def main_loop():
                 retransmit_buff[rdp_obj.connection_id]= {} 
                 while info_to_send : #remember to clear snd buff after all is done
                     msg= info_to_send.pop(0)
+                    if msg.ack_num!= rdp_obj.current_ack:
+                        msg= packet(msg.command, msg.seq_num, rdp_obj.current_ack, msg.payload, msg.window_space) 
                     print("SENDING....", msg)
                     print("\n\n\n -------7-7-7-7-7------------\n\n")
                     seq_no = msg.seq_num
