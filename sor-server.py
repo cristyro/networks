@@ -32,12 +32,13 @@ sucess_req= {} #queue of successful requests
 
 #server process the http request and sends the response from the client !!!!!
 class packet:
-    def __init__(self, command,seq_num, ack_num, payload):
+    def __init__(self, command,seq_num, ack_num, payload, window_size):
         self.command= command
         self.seq_num= seq_num
         self.ack_num= ack_num
         self.payload= payload
         self.length= len(payload)
+        self.window_space= window_size
     
     def add_command(self, new_command):
         self.commmand+= new_command
@@ -53,7 +54,7 @@ class packet:
         self.length= len(new_payload)
    
     def __str__(self) :
-        return f"Command: {self.command}, Seq: {self.seq_num}, Ack: {self.ack_num}, Length: {self.length}, Payload: {self.payload}"
+        return f"Command: {self.command}, Seq: {self.seq_num}, Ack: {self.ack_num}, Length: {self.length}, Payload: {self.payload}, Window: {self.window_space}"
 
 #----------Helpers to service requests ----------------
 
@@ -88,7 +89,7 @@ class rdp:
         self.set_state("syn-received")
         #ACK|SYN in packet to client 
         command= ["SYN","ACK"]
-        syn_init= packet(command, 0, 0, "") #update the seq and ack numbers
+        syn_init= packet(command, 0, 0, "", self.win_available) #update the seq and ack numbers
         snd_buff[self.connection_id]= [syn_init]  
         self.set_state("connect")#since we are sending ACK|SYN evolve to connect
 
@@ -147,29 +148,42 @@ class rdp:
         dat_string += data[:chars_to_add]  # Add characters to the buffer
         remaining_data = data[chars_to_add:]  # Save remaining data for next iteration
 
-        if len(dat_string) == payload_len:
-            # If the buffer reaches the payload length, create DAT packet and put it
-            dat_packet = packet("DAT", self.current_seq, 0, dat_string)
-            if is_first_packet: #if it is the first packet send automatically
+        print("current sequence number is", self.current_seq)
+        print("*******************************************")
+        print("*******************************************")
+        print("*******************************************\n\n\n")
+
+
+        if len(dat_string) == payload_len or remaining_data:
+            dat_packet = packet("DAT", self.current_seq, 0, dat_string, self.win_available)
+            print("Created DAT packet with seq_num:", self.current_seq, "Payload length:", len(dat_string))
+            self.current_seq += len(dat_string)  # Update sequence number
+            print("Updated current_seq to:", self.current_seq)
+
+            if is_first_packet:  # If it is the first packet, send automatically
                 snd_buff[self.connection_id].append(dat_packet)
             else:
                 self.put_dat(dat_packet)
 
-            dat_string = ""  # reset after putting it in the buffer
-            
+            dat_string = ""  # Reset after putting it in the buffer
 
-        else:  # We were able to fit all the payload in a "small packet"
-            dat_packet = packet("DAT", self.current_seq, 0, dat_string)
-            if is_first_packet: #if it is the first packet send automatically
+        elif not remaining_data:  # If we've added all data into a "small packet"
+            dat_packet = packet("DAT", self.current_seq, 0, dat_string, self.win_available)
+            self.current_seq += len(dat_string)  # Update sequence number
+            print("Created small DAT packet with seq_num:", self.current_seq, "Payload length:", len(dat_string))
+
+            if is_first_packet:  # If it is the first packet, send automatically
                 snd_buff[self.connection_id].append(dat_packet)
             else:
                 self.put_dat(dat_packet)
-            dat_string = "" 
+
+            dat_string = ""  # Reset after putting it in the buffer
 
         if remaining_data:
-            self.pack_data(remaining_data, is_first_packet=False)  # pack recursively
+            print("Recursively calling pack_data for remaining data --------\n\n")
+            self.pack_data(remaining_data, is_first_packet=False)
 
-        
+   
 
     #Function were we extract each GET request provided and service it by calling helpers
     def gather_req(self, command):
@@ -201,7 +215,7 @@ class rdp:
         global clients
         global rcv_buff
         print("terminating due to RST")
-        rst_pack= packet("RST", self.current_seq, self.current_ack, " ")
+        rst_pack= packet("RST", self.current_seq, self.current_ack, " ", self.win_available)
         sock.sendto(str(rst_pack).encode(), self.addr)
 
         self.terminate_conn()
@@ -216,12 +230,8 @@ class rdp:
             self.send_rst()
             return False
         
-        #how do i pop stuff from the win ?
         #release the sliding win 
         elif "ACK" in command :
-            if int (ack) > self.current_ack:
-                self.current_ack = int(ack)
-            print("New ack is ", self.current_ack)
             return True
 
         else:
@@ -269,62 +279,85 @@ class rdp:
     #updates current_ack and current_seq accordingly
     def generate_nums(self, my_paylen, client_paylen):
         if self.first_packet:
-            self.current_seq+= my_paylen
+            self.current_seq = 0+ my_paylen
             self.first_packet= False
         else:
             self.current_seq+= my_paylen #my paylength 
 
-        print("MY  paylen in generate nums is:", self.current_seq)
         self.current_ack+= int(client_paylen) #acknowledge client's received packet
 
         #Send True if I reach non-zero
     def can_send_pack(self, packet_len): #peek next packet len
         measure_win = self.win_available - packet_len
-        return measure_win >=0
+        print("AVAILABLE", self.win_available, "VS PACK LEN", packet_len, "\n\n----------------")
+        if (measure_win>=0):
+            self.win_available -= packet_len
+            return True 
+        
+        return False
+    
 
 
     def release_packets(self):
         #where window is a list of packets sorted with their seq no
         print("in release ......\n")
         print("In our window we have: ", len (self.window) )
-
+        print("FIRST item in window length :", self.window[0]. length, "Whats inside?", self.window)
         while self.window!=[] and self.can_send_pack((self.window[0]).length): 
                 next_packet= self.window.pop(0) #Gets the next inmediate packet to send
-                print("next packet len?", next_packet.length)
-                print("current seq:", self.current_seq)
-                updated_packet = packet(next_packet.command, self.current_seq, self.current_ack, next_packet.payload)
-
-                if self.window:
-                    peek= self.window[0]
-                    print("peek next len?", peek.length)
-                    self.current_seq += peek.length  #peek next
-
-                print("seq no is now:", self.current_seq)
-                #how can i peek into next item in window?
+                updated_packet = packet(next_packet.command, next_packet.seq_num, next_packet.ack_num, next_packet.payload, self.win_available)
                 snd_buff[self.connection_id].append(updated_packet)
+
+
+    def update_window(self):
+        updated_list=[]
+        print("Starting window length: ", len (self.window))
+        for packet in self.window:
+            print("SEQ no:", packet.seq_num)
+            if packet.seq_num > self.current_ack: #only add if its unacked, and remove all acked packets
+                updated_list.append(packet)
+        
+        self.window =[]
+        self.window = updated_list
+        print("Updated length is :", len (self.window) , "\n\n")
+    
 
     #Only here if we have an ACK
     #might have to add more states and transitions     
     #Returns false if ACK is in command and we want to stop parsing and skip to sending data to the client
     def process_ack(self, command)-> bool :
         global send_data
+        seq, ack, client_paylen = self.find_numbers(command)
+        received_ack= int(ack)
         print("Received", command)
+
         if self.get_state()== "fin-sent" and "FIN in command": 
             print("CUT OFF CLIENT")
             self.set_state("conn-fin-rcv")
             self.terminate_conn()
             return False
+        
         else: #Send as many packets as we can
-            print("release all possible packets? ")
-            print("\n our current ack_no", self.current_ack)
-            print("Releasing packets acked", len(self.window ))
-            self.release_packets()
-            print ("\n----------------------------\n")
-            self.window= [packet for packet in self.window if packet.seq_num >= self.current_ack] #Remove all packets in the window after the ack
-            print("now left with:", self.window)
-            self.expected_seq = max (self.expected_seq, self.current_ack) #update? see if causes no problems
-            #print("expected is now, updated in process_ack ", self.expected_seq)
-            self.set_state("connect")
+            #updating own window capacity
+            print("own capacity before update: ", self.win_available)
+            print("received ack is:", received_ack)
+            if self.window:
+                if self.win_available <= self.window[0].length :
+                    missing= received_ack - self.current_ack
+                    print("adding ", missing,  " to window")
+                    self.win_available += missing
+                self.current_ack = received_ack
+                print("win has now ...." ,self.win_available, "\n\n ----------000000---------\n\n")
+                self.release_packets()
+                print ("\n----------------------------\n")
+                self.update_window()
+                print("now left with after releasing :", len (self.window) )
+                self.expected_seq = max (self.expected_seq, self.current_ack) #update? see if causes no problems
+                #print("expected is now, updated in process_ack ", self.expected_seq)
+                self.set_state("connect")
+            else:
+                print("we are done! add fin")
+
             return False
         
 
@@ -382,33 +415,29 @@ class rdp:
 
             if p.command == "DAT" and first_dat:
                 print("HERE $2")
-                first_dat = False
+                self.current_seq=0
                 commands.append("DAT")
                 print(self.get_state())
+                first_dat = False
             
             elif self.get_state()== "fin-rcv" : #maybe add other conditions?
-                print("HERE $3")
-                print("STATE", self.get_state())
-                print("window?", self.window)
-
                 commands.append("FIN")
 
             if (self.get_state()== "fin-rcv") and "DAT" in commands:
                 print("HERE $4")
-
                 self.generate_nums(p.length, client_paylen)
-                new_pack= packet(self.to_string(commands), self.current_seq, self.current_ack, p.payload)
+                new_pack= packet(self.to_string(commands), self.current_seq, self.current_ack, p.payload, self.win_available)
                 self.set_state("fin-sent")
                 snd_buff[self.connection_id].append(new_pack)
 
             if "DAT" in commands:
-                if not queue_msg and not self.window: # if we reach the end
-                    print("HERE ........................")
-                    print("Appending it here at the end-----")
+                if not queue_msg and not self.win_available: # if we reach the end
+                    print("HERE  $5 ?........................")
+                    #print("Appending it here at the end-----")
                     commands.append("FIN")
                     self.set_state("fin-sent")
                 self.generate_nums(p.length, client_paylen)
-                new_pack= packet(self.to_string(commands), self.current_seq, self.current_ack, p.payload)
+                new_pack= packet(self.to_string(commands), self.current_seq, self.current_ack, p.payload, self.win_available)
                 snd_buff[self.connection_id].append(new_pack)
 
                   
@@ -434,7 +463,7 @@ def main_loop():
         for s in readable:
             data, addr = s.recvfrom(5000)
             port_no= addr[1] 
-            #print("Received ", data.decode())
+            print("Received ", data.decode())
 
             # If the client is new, initialize RDP object
             if not port_no in clients:
@@ -455,7 +484,8 @@ def main_loop():
                 retransmit_buff[rdp_obj.connection_id]= {} 
                 while info_to_send : #remember to clear snd buff after all is done
                     msg= info_to_send.pop(0)
-                    #print("SENDING....", msg)
+                    print("SENDING....", msg)
+                    print("\n\n\n -------7-7-7-7-7------------\n\n")
                     seq_no = msg.seq_num
                     retransmit_buff[rdp_obj.connection_id][seq_no]= msg
                     sock.sendto(str(msg).encode(), addr)
@@ -464,6 +494,6 @@ def main_loop():
 
 
 if __name__== "__main__":
-    ip, port , window_size, payload_len = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+    ip, port , window_size, payload_len = sys.argv[1], int(float (sys.argv[2])), int(sys.argv[3]), int(sys.argv[4])
     udp_sock_start(ip, port)
     main_loop()
