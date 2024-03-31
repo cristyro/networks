@@ -101,6 +101,7 @@ class PayloadHandler:
         self.payload_acc=""
         self.expected_content_length= None
 
+
     def select_payload(self, string_with_command, initial_payload):
         pay_wanted=""
         if initial_payload:
@@ -121,12 +122,20 @@ class PayloadHandler:
             return pay_wanted
 
     def check_and_write(self):
+        print("current file is :", self.current_file)
         print("in check and write", self.expected_content_length, len(self.payload_acc), "Are equal?", len(self.payload_acc) == int(self.expected_content_length))
         print( type(len(self.payload_acc)), type(self.expected_content_length)  )
         if len(self.payload_acc) == int(self.expected_content_length): 
             self.write_to_file(self.payload_acc) #In case we received extra data 
             self.expected_content_length= None #reset for next file 
 
+    def get_number(self, string):
+        num = ""
+        for part in string.split():
+            if part.isnumeric():
+                num+=part
+        print(num)
+        return num
 
     #Processes the given data, extracts content length if present, accumulates payload, and writes to file as necessary.
     def gather_payload(self,data):
@@ -135,17 +144,30 @@ class PayloadHandler:
         # Regular expression to find content length and initial part of the payload
         pattern = r"Content Length: (\d+)\r?\n\r?\n([\s\S]*)"
         matches = re.search(pattern, data)
+        print("DATA we want to process :", matches)
+        print("\n\n\n\n ---------------------------")
 
         if matches:
             file_in_order= all_req.pop(0)
+            print("servicing :", file_in_order)
             self.set_file(file_in_order)
+            content_len_str= matches.group(0)
+            list_matches = content_len_str.split("\r\n\r\n")
+  
+            content_len_str = list_matches[0]
+            initial_payload = list_matches[1]
+            content_len = self.get_number(content_len_str)
+            self.expected_content_length = int (content_len)  # Set the expected content length
+            print("content len ", content_len_str)
+
             # Extract content length and initial payload from the data
-            content_len_str, initial_payload = matches.groups()
+            print("-----------------------\n")
+            print("content length :", content_len)
+
             initial_payload = self.select_payload(initial_payload, True)
-            if len(initial_payload)== int(content_len_str):
+            if len(initial_payload)== int(content_len):
                 self.check_and_write()
-            content_len = int(content_len_str)
-            self.expected_content_length = content_len  # Set the expected content length
+                
             self.payload_acc+= initial_payload #Add initial payload to accumulator
 
             if not self.have_sent_first: #acknowledge first request
@@ -388,7 +410,7 @@ def main_loop():
         for s in readable:
             data, addr = sock.recvfrom(5000)
             data = data.decode()
-            #print("Received ", data , "\n\n\n....................\n")
+            print("Received ", data , "\n\n\n....................\n")
             rcv_buff.append(data)
             if rdp_obj.in_accordance(data): #checks the seq no
                 #print("into processing data.....")
