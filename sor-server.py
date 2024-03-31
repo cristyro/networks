@@ -123,24 +123,27 @@ class rdp:
     # The sequence number is updated according to each packets length 
     # Packets are either sent directly (in snd_buff) if they contain a SYN or 
     # added to the sliding window waiting to be acknowledged
-    def pack_data(self, data, is_first_packet=True):
+    def pack_data(self, data, is_first_packet, last_req):
         global snd_buff
         dat_string = data
+
         while data:
             chars_to_add = min(payload_len, len (data) )  # Determine the amount of data to add to this packet
             dat_string = data[:chars_to_add]  # Extract the data for this packet
             data = data[chars_to_add:]  # Update the remaining data
             
-            if not data: #if we are at the last packet
+            if not data and last_req: #if we are at the last packet
                 command = "DAT|FIN"
+
             else:
                 command = "DAT"
 
             dat_packet = packet(command, self.current_seq, 0, dat_string, self.win_available)
-            print(f"Created DAT packet with seq_num: {self.current_seq}, Payload length: {len(dat_string)}")
 
             if is_first_packet:
                 dat_packet = packet(command, 0, 0, dat_string, self.win_available)
+                print("FIRST DAT packet added to snd_buff", dat_packet)
+                print("\n\n----------------")
                 self.current_seq += len (dat_string)
                 snd_buff[self.connection_id].append(dat_packet)
                 is_first_packet = False
@@ -149,9 +152,6 @@ class rdp:
                 self.current_seq += len (dat_string)
 
             # Update the sequence number by the amount of data added to this packet
-            print("Chars to add", chars_to_add)
-            print(f"After updating;", {self.current_seq})
-            print("\n\n .....................\n\n")
 
 
 
@@ -160,11 +160,27 @@ class rdp:
         #print("packing up....", command)
         patt= r'GET(?:.|\n)*?(?=GET|$)'
         matches= re.findall(patt, command) 
+        req_amount = len(matches)
+        print("matches:", matches, len(matches))
+        count= 0
         for match in matches:
             match = match.split("\r\n\r\n") #anything matched after the \r\n\r\n we dont care
             match= match[0]
             answ= self.service_request(match)
-            self.pack_data(answ)
+            if count==0: #Pass true for first dat packet 
+                if req_amount==1: #last request 
+                    self.pack_data(answ, True, True)
+                else:
+                    self.pack_data(answ, True, False)
+
+            elif not matches: #matches is now empty
+                print("going into line 177 in gather REQ......")
+                self.pack_data(answ,False, True)
+
+            else:
+                self.pack_data(answ, False, False)
+            
+            count+=1
 
     #Determines if we need to send a RST and terminate connection
     def to_reset(self, seq, command) -> bool:
@@ -205,7 +221,6 @@ class rdp:
             return True
 
         else:
-            #print("received", int(seq) + int(client_paylen))
             if self.expected_seq == int(seq):
                     self.expected_seq = int(seq) + int(client_paylen)
                     print("Expected sequence number updated to:", self.expected_seq)
@@ -230,10 +245,9 @@ class rdp:
         if self.connection_id in rcv_buff:
             rcv_buff.pop(self.connection_id)
 
-
+    #Remove duplicates
     def to_string(self, nested_commads):
         combined_commands = "|".join([item if isinstance(item, str) else '|'.join(item) for item in nested_commads])
-        #print("COMBINED COMMANDS", combined_commands)
         return combined_commands
     
     #finds the SEQ, ACK and LENGTH of the packet received, isolates them and returns them
@@ -310,7 +324,6 @@ class rdp:
                     self.win_available += missing
 
                 self.current_ack = received_ack
-                print("updating my ack to ," , self.current_ack)
                 self.release_packets()
                 print ("\n----------------------------\n")
                 self.update_window()
@@ -358,12 +371,14 @@ class rdp:
         commands= []
         string_commands= ""
         first_dat = True
-        
         queue_msg= snd_buff[self.connection_id]
         snd_buff[self.connection_id]=[]
+        dat_to_send = False
 
         while queue_msg:
             p= queue_msg.pop(0)
+            #print("packet ...00000...", str (p), p.command )
+
             bytes_form= rcv_buff[self.connection_id]
             string_received= bytes_form[0].decode()
             client_seq, client_ack, client_paylen=  self.find_numbers(string_received)
@@ -371,16 +386,17 @@ class rdp:
             if p.command!= "DAT":
                 commands.append(p.command)
 
-            if p.command =="DAT" and not first_dat:
+            if "DAT" in p.command and not first_dat:
                 print("HERE $1")
                 commands= ["DAT"]
+                dat_to_send = True
 
-            if p.command == "DAT" and first_dat:
+            if "DAT" in p.command and first_dat:
                 print("HERE $2")
                 self.current_seq=0
                 commands.append("DAT")
+                dat_to_send =True 
                 print(self.get_state())
-                first_dat = False
             
             elif self.get_state()== "fin-rcv" : #maybe add other conditions?
                 print("here $3")
@@ -393,14 +409,22 @@ class rdp:
                 self.set_state("fin-sent")
                 snd_buff[self.connection_id].append(new_pack)
 
-            if "DAT" in commands:
-                if not queue_msg and not self.win_available: # if we reach the end
-                    print("HERE  $5 ?........................")
-                    commands.append("FIN")
-                    self.set_state("fin-sent")
+            if dat_to_send:
+                print("Here $5")
                 self.generate_nums(p.length, client_paylen)
                 new_pack= packet(self.to_string(commands), p.seq_num, self.current_ack, p.payload, self.win_available)
-                snd_buff[self.connection_id].append(new_pack)
+
+                if first_dat:
+                    print("here $8")
+                    snd_buff[self.connection_id].append(new_pack)
+                    print("ADDED TO SND BUFF:",new_pack )
+                    first_dat= False
+                else:
+                    if not queue_msg and not self.win_available: # if we reach the end
+                        print("HERE  $5 ?........................")
+                        commands.append("FIN")
+                        self.set_state("fin-sent")
+                    self.put_dat(new_pack)
 
 
 
@@ -440,7 +464,7 @@ def main_loop():
         for s in readable:
             data, addr = s.recvfrom(5000)
             port_no= addr[1] 
-            #print("Received ", data.decode())
+            #print("Received ------", data.decode())
 
             # If the client is new, initialize RDP object
             if not port_no in clients:
@@ -457,12 +481,16 @@ def main_loop():
        
             # Send data to clients
             if rdp_obj.connection_id in snd_buff:
+                print("%1 \n")
                 info_to_send= snd_buff[rdp_obj.connection_id]
+                print("info to send:",  snd_buff[rdp_obj.connection_id])
                 retransmit_buff[rdp_obj.connection_id]= {} 
                 while info_to_send : #remember to clear snd buff after all is done
+                    print("%3 \n")
                     msg= info_to_send.pop(0)
                     if msg.ack_num!= rdp_obj.current_ack:
                         msg= packet(msg.command, msg.seq_num, rdp_obj.current_ack, msg.payload, msg.window_space) 
+                    print("%4 \n")
                     print("SENDING....", msg)
                     print("\n\n\n -------7-7-7-7-7------------\n\n")
                     seq_no = msg.seq_num
