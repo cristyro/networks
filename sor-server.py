@@ -43,7 +43,7 @@ class packet:
         self.commmand+= new_command
    
     def __str__(self) :
-        return f"Command: {self.command}, Seq: {self.seq_num}, Ack: {self.ack_num}, Length: {self.length}, Payload: {self.payload}, Window: {self.window_space}"
+        return f"Command: {self.command}, Seq: {self.seq_num}, Ack: {self.ack_num}, Length: {self.length}, Payload:****{self.payload}****, Window: {self.window_space}"
 
 #   ----------Class to handle the RDP  and main state machine ----------
 class rdp:
@@ -102,7 +102,7 @@ class rdp:
                 data= file.read()
                 sucess_message.setdefault(self.connection_id, {})[request]= data
                 sucess_req[self.connection_id]= request
-                answ= "HTTP/1.0 200 OK"+ "\r\n"+"Content Length: "+str(len(data))+"\r\n\r\n"+data
+                answ= "HTTP/1.0 200 OK"+ "\r\n"+"Content Length: "+ str(len(data))+"\r\n\r\n"+data
             
         else:
             answ = "HTTP/1.0 404 Not Found"+ filename
@@ -128,17 +128,19 @@ class rdp:
         dat_string = data
         while data:
             chars_to_add = min(payload_len, len (data) )  # Determine the amount of data to add to this packet
-            print("LEN of data",len(data), "len of dat_String", len(dat_string))
-            print("\n")
             dat_string = data[:chars_to_add]  # Extract the data for this packet
-            print("dat string: ", dat_string)
             data = data[chars_to_add:]  # Update the remaining data
-            # Create and handle the packet with dat_string
-            dat_packet = packet("DAT", self.current_seq, 0, dat_string, self.win_available)
+            
+            if not data: #if we are at the last packet
+                command = "DAT|FIN"
+            else:
+                command = "DAT"
+
+            dat_packet = packet(command, self.current_seq, 0, dat_string, self.win_available)
             print(f"Created DAT packet with seq_num: {self.current_seq}, Payload length: {len(dat_string)}")
 
             if is_first_packet:
-                dat_packet = packet("DAT", 0, 0, dat_string, self.win_available)
+                dat_packet = packet(command, 0, 0, dat_string, self.win_available)
                 self.current_seq += len (dat_string)
                 snd_buff[self.connection_id].append(dat_packet)
                 is_first_packet = False
@@ -186,7 +188,6 @@ class rdp:
         print("terminating due to RST")
         rst_pack= packet("RST", self.current_seq, self.current_ack, " ", self.win_available)
         sock.sendto(str(rst_pack).encode(), self.addr)
-
         self.terminate_conn()
 
     #determines if the sequence number is right! if it is, then receive package
@@ -260,11 +261,9 @@ class rdp:
         measure_win = self.win_available - packet_len
         if (measure_win>=0):
             self.win_available -= packet_len
-            return True 
-        
+            return True   
         return False
     
-
 
     def release_packets(self):
         #where window is a list of packets sorted with their seq no
@@ -318,7 +317,8 @@ class rdp:
                 #print("expected is now, updated in process_ack ", self.expected_seq)
                 self.set_state("connect")
             else:
-                print("we are done! add fin")
+                self.terminate_conn()
+                print("cest fini")
 
             return False
         
