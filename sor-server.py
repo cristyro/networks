@@ -28,7 +28,6 @@ clients= {} #keep instances of the rdp class
 sucess_message= {} #queue of successful messages
 sucess_req= {} #queue of successful requests
 
-#have a lisst with active clients 
 
 #server process the http request and sends the response from the client !!!!!
 class packet:
@@ -42,26 +41,13 @@ class packet:
     
     def add_command(self, new_command):
         self.commmand+= new_command
-
-    def update_seq(self, new_seq):
-        self.seq_num= new_seq
-
-    def update_ack(self, new_ack):
-        self.ack_num= new_ack
-
-    def update_payload(self, new_payload):
-        self.payload= new_payload
-        self.length= len(new_payload)
    
     def __str__(self) :
         return f"Command: {self.command}, Seq: {self.seq_num}, Ack: {self.ack_num}, Length: {self.length}, Payload: {self.payload}, Window: {self.window_space}"
 
-#----------Helpers to service requests ----------------
-
-#   ---Class to handle the RDP state machine ---
+#   ----------Class to handle the RDP  and main state machine ----------
 class rdp:
     def __init__(self, connect_id, addr):
-        print("init class constructor called ************\n **********\n")
         self.state= "idle"
         self.addr= addr
         self.connection_id= connect_id
@@ -81,37 +67,36 @@ class rdp:
         return self.state
     
     def put_dat(self, dat):
-        # Add to send buffer if there's window space; else, add to window queue
         self.window.append(dat)
 
+    #Handles the reception of a new connection.
     def receive_connection(self):
         global snd_buff
         self.set_state("syn-received")
         #ACK|SYN in packet to client 
-        command= ["SYN","ACK"]
-        syn_init= packet(command, 0, 0, "", self.win_available) #update the seq and ack numbers
+        syn_init= packet("SYN|ACK", 0, 0, "", self.win_available) #update the seq and ack numbers
         snd_buff[self.connection_id]= [syn_init]  
-        self.set_state("connect")#since we are sending ACK|SYN evolve to connect
+        self.set_state("syn-sent") #since we are sending ACK|SYN evolve to syn-sent
 
-    #------------ All the helpers to service HTTP requests-----------
+    #------------ All the helpers to service and process HTTP requests-----------
             
-    #If we go in here send FIN and close the connectin INMEDIATELY 
+    # Generates a response for a bad request
     def bad_request():
         return "HTTP/1.0 400 Bad Request\r\nConnection: close\r\n\r\n"
         exit(1) #replace for sending FIN
 
+    # Checks if the connection should be kept alive.
     def is_persitent(self, request):
         request= request.replace("\r\n", " ")
         if "Connection:Keep-alive" not in request:
             self.finish= "True"
                     
-    #todo:check format 
+    #Generates a response to an HTTP request
     def request_answ(self, result, request):
         global sucess_message
         global sucess_req
         filename= result[0].strip()
         filename= filename[1:]
-        #Add checks to see if persistent or not. if not send FIN
         if os.path.isfile(filename): #if the file exists
             with open(filename, "r") as file:
                 data= file.read()
@@ -123,12 +108,7 @@ class rdp:
             answ = "HTTP/1.0 404 Not Found"+ filename
         return answ
 
-
-    #Categorize request by the type of request
-    #Possible requests answers:
-            #1. 200 OK -> will automatically populate dictionary with its content associated with req
-            #2. 400 -> BAD request. Will send fin (TODO: add FIN)
-            #3. 404 -> File not found. Will append it on the payload for client to handle
+    # Processes an incoming HTTP request.
     def service_request(self, request):
         str_format = re.compile(r'GET\s([^\s]+)\s+HTTP/1.0')  # regex to get filename 
         result = re.findall(str_format, request)
@@ -139,51 +119,35 @@ class rdp:
             self.is_persitent(request)
         return answ
     
-    # Helper to split and packet all the data according to specified payload length
+    # Splits packages of the requested data into packets. 
+    # The sequence number is updated according to each packets length 
+    # Packets are either sent directly (in snd_buff) if they contain a SYN or 
+    # added to the sliding window waiting to be acknowledged
     def pack_data(self, data, is_first_packet=True):
         global snd_buff
-        dat_string = ""
-        remaining_space = payload_len - len(dat_string)
-        chars_to_add = min(remaining_space, len(data))  # Determine how many characters to add
-        dat_string += data[:chars_to_add]  # Add characters to the buffer
-        remaining_data = data[chars_to_add:]  # Save remaining data for next iteration
+        dat_string = data
+        while data:
+            chars_to_add = min(payload_len, len (dat_string) )  # Determine the amount of data to add to this packet
+            print("LEN of data",len(data), "len of dat_String")
+            print("\n")
+            dat_string = data[:chars_to_add]  # Extract the data for this packet
+            data = data[chars_to_add:]  # Update the remaining data
 
-        print("current sequence number is", self.current_seq)
-        print("*******************************************")
-        print("*******************************************")
-        print("*******************************************\n\n\n")
-
-
-        if len(dat_string) == payload_len or remaining_data:
+            # Create and handle the packet with dat_string
             dat_packet = packet("DAT", self.current_seq, 0, dat_string, self.win_available)
-            print("Created DAT packet with seq_num:", self.current_seq, "Payload length:", len(dat_string))
-            self.current_seq += len(dat_string)  # Update sequence number
-            print("Updated current_seq to:", self.current_seq)
+            print(f"Created DAT packet with seq_num: {self.current_seq}, Payload length: {len(dat_string)}")
 
-            if is_first_packet:  # If it is the first packet, send automatically
+            if is_first_packet:
                 snd_buff[self.connection_id].append(dat_packet)
+                is_first_packet = False
             else:
                 self.put_dat(dat_packet)
 
-            dat_string = ""  # Reset after putting it in the buffer
-
-        elif not remaining_data:  # If we've added all data into a "small packet"
-            dat_packet = packet("DAT", self.current_seq, 0, dat_string, self.win_available)
-            self.current_seq += len(dat_string)  # Update sequence number
-            print("Created small DAT packet with seq_num:", self.current_seq, "Payload length:", len(dat_string))
-
-            if is_first_packet:  # If it is the first packet, send automatically
-                snd_buff[self.connection_id].append(dat_packet)
-            else:
-                self.put_dat(dat_packet)
-
-            dat_string = ""  # Reset after putting it in the buffer
-
-        if remaining_data:
-            print("Recursively calling pack_data for remaining data --------\n\n")
-            self.pack_data(remaining_data, is_first_packet=False)
-
-   
+            # Update the sequence number by the amount of data added to this packet
+            print("MOTHER FUCKING BITCH chars to add", chars_to_add)
+            self.current_seq += len (data)
+            print(f"After fucking updating;", {self.current_seq})
+            print("\n\n .....................\n\n")
 
     #Function were we extract each GET request provided and service it by calling helpers
     def gather_req(self, command):
@@ -207,6 +171,7 @@ class rdp:
             return False #Do not reset
         else:
             print("sending reset")
+            exit(1)
             #If its outside our range send RST
             return True 
     
@@ -440,8 +405,16 @@ class rdp:
                 new_pack= packet(self.to_string(commands), self.current_seq, self.current_ack, p.payload, self.win_available)
                 snd_buff[self.connection_id].append(new_pack)
 
-                  
+
+
 def udp_sock_start(ip, port):
+    """
+    Initializes the UDP socket.
+    Args:
+        ip: The IP address as a string to bind the socket.
+        port: The port number as an integer to bind the socket.
+    This function sets up the socket to be non-blocking and reuses the address.
+    """
     global sock
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -450,6 +423,13 @@ def udp_sock_start(ip, port):
 
 
 def main_loop():
+    """
+    The main event loop of the server.
+    Continuously checks for incoming data, processes it according to the RDP protocol,
+    and handles sending and receiving of packets. It manages client connections, packet acknowledgment,
+    and retransmission based on the RDP state machine.
+    """
+
     global snd_buff, rcv_buff, retransmit_buff
     global payload_len
     global clients
