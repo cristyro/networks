@@ -21,6 +21,7 @@ all_req=[]
 window_size = 0 #change to given by client
 files_to_write =[]
 payload_acc= "" #only modify when we need to accumulate payload 
+usual_length = 0
 
 
 def udp_sock_start(ip, port):
@@ -97,7 +98,6 @@ class PayloadHandler:
     #writes data to specific file and resets necessary variables
     def write_to_file(self, data):
         print("writing to", self.current_file)
-
         with open(self.current_file, 'w') as file:
             file.write(data)
 
@@ -107,15 +107,16 @@ class PayloadHandler:
         self.expected_content_length= None
 
     def select_payload(self, string_with_command):
-        pattern = r"Payload:(?:\s)?(.*)"
+        pattern =  r"^(.*?)(?=,\s*Window:)"
         match_payload = re.search(pattern, string_with_command, re.DOTALL)
-        #print("match payload?", match_payload)
+        print("match payload:", match_payload)
         if match_payload:
+            print(match_payload)
             pay_wanted= match_payload.group(1)
             return pay_wanted
 
     def check_and_write(self):
-        #print("current length: ", len(self.payload_acc),  "WE expect total of :", self.expected_content_length, "\n\n")
+        print("in check and write", self.expected_content_length, len(self.payload_acc))
         if self.expected_content_length is not None and len(self.payload_acc) == (self.expected_content_length) : #TODO figure were we lost the 1 
             self.write_to_file(self.payload_acc) #In case we received extra data 
             self.expected_content_length= None #reset for next file 
@@ -124,6 +125,7 @@ class PayloadHandler:
     #Processes the given data, extracts content length if present, accumulates payload, and writes to file as necessary.
     def gather_payload(self,data):
         global all_req
+        global usual_length
         print("in gather payload\n\n.......")
         data= data.decode()
         # Regular expression to find content length and initial part of the payload
@@ -135,7 +137,11 @@ class PayloadHandler:
             self.set_file(file_in_order)
             # Extract content length and initial payload from the data
             content_len_str, initial_payload = matches.groups()
-            #print("initial payload", initial_payload, "\n\n........")
+            initial_payload = self.select_payload(initial_payload)
+            print("initial payload:",repr (initial_payload),"with length",len(initial_payload), "\n\n..............")
+            if len(initial_payload)== int(content_len_str):
+                print("can we write you?")
+                self.check_and_write()
             content_len = int(content_len_str)
             self.expected_content_length = content_len  # Set the expected content length
             self.payload_acc+= initial_payload #Add initial payload to accumulator
@@ -145,9 +151,8 @@ class PayloadHandler:
                 self.have_sent_first= True #change to True once sent first ACK
         else: 
             pay_wanted= self.select_payload(data)         
-            #print("adding to acc", repr(pay_wanted), "\n\n......")
-            #keep accumulating data for the payload
             self.payload_acc+= pay_wanted
+            usual_length= len(data)
             #Check if we have reached content length 
 
         self.check_and_write() #Check at the end of the iteration if we can write to file
@@ -176,6 +181,7 @@ class rdp:
         self.current_ack=0
         self.expected_seq= 0 
         self.sent_data= 0
+        self.last_received= ""
         self.window =[] #keeps track of sent but unacked packets
         self.payload_manager= PayloadHandler(self) #Pass our instance for inheritance 
 
@@ -206,11 +212,10 @@ class rdp:
         # This includes both a bit ahead of expected_seq and a bit behind, to accommodate reordering or retransmission
         if self.expected_seq - window_size <= seq_num <= self.expected_seq + window_size:
             # If within range, then no need to send RST
-            print("within acceptable range")
             return False
         else:
             # If outside this range, it may indicate an error or unexpected behavior, thus RST is considered
-            print("sending reset")
+            print("sending reset, you are fucked ")
             return True
 
     
@@ -225,8 +230,7 @@ class rdp:
  
     def in_accordance(self, command) -> bool:
         check_expected= 0
-        seq, ack, client_paylen = self.gather_info(command)
-        print("command", command[0:55])
+        seq, ack, client_paylen, window = self.gather_info(command)
         if self.to_reset(seq):
             self.send_rst()
             return False
@@ -238,6 +242,7 @@ class rdp:
                 self.expected_seq = int(seq) + int(client_paylen)
                 # Update current sequence number 
                 self.current_seq= check_expected
+                self.last_received= seq
                 print(" **************************************")
                 return True
             else:
@@ -299,9 +304,13 @@ class rdp:
          
     #Gathers and parses Sequence numbers,ack numbers and payload length 
     def gather_info(self, data):
-        pattern = rb"Seq:\s*(-?\d+).*?Ack:\s*(-?\d+).*?Length:\s*(\d+)"
+        data = data.decode()
+        pattern = r"Seq:\s*(-?\d+).*?Ack:\s*(-?\d+).*?Length:\s*(\d+).*?"
         matches = re.findall(pattern, data)
-        flattened= [command.decode() for command_tuple in matches for command in command_tuple]
+        window_pattern = re.compile(r"Window:\s*(\d+)")
+        window_match= window_pattern.search(data)
+        flattened= [command for command_tuple in matches for command in command_tuple]
+        flattened.append(window_match.group(1))
         return flattened 
     
     def can_send_pack(self,pack_len):
@@ -317,23 +326,37 @@ class rdp:
             if self.window:
                 peek= self.window[0]
                 self.current_seq += peek.length  #peek next
-            snd_buff.append(updated_packet)
+                print("added to snd_buff....", updated_packet)
+                snd_buff.append(updated_packet)
 
     def manage_acks(self, found_ack, paylen):
         #updates initial state of syn received to connect state upon receiving initial client handshake
         expected_ack = self.current_ack+ self.sent_data
+        print("expected ACK", expected_ack, "found_ack is", found_ack)
         if expected_ack==int(found_ack):
             if self.get_state()=="syn-rcv":
                 self.set_state("connect")
             self.current_ack= int(paylen)+1 #update our current if we get ack we want 
 
         else:
+            print("HERE IN manage acks $6")
             self.release_packets()
             #removes all the packets from the sliding window once they have been acked
             self.window = [p for p in self.window if p.seq_num > int(found_ack)]
             print("after acks , we have", len(self.window))
-            self.current_ack = max (found_ack, self.change_current_seq) # this is what we found has been last acknowledge on the other side 
-            
+            self.current_ack = max (found_ack, self.current_seq) # this is what we found has been last acknowledge on the other side 
+
+
+    #update you server of my current ack 
+    def sender_win(self, window_on_server):
+        print("in sender win", int (window_on_server) )
+        if int (window_on_server) == 0 or int  (window_on_server) <= usual_length: 
+            #send an ACK 
+            self.current_ack = self.last_received
+            print("sending ack to slide window -------ccccccc-------\n\n")
+            ack_to_sender= packet("ACK", self.current_seq, self.current_ack, "")
+
+            snd_buff.append(ack_to_sender)
     
     def process_data(self, data):
         global snd_buff
@@ -342,6 +365,7 @@ class rdp:
         found_seq= int (nums_found[0])
         found_ack =int (nums_found[1])
         found_paylen= int (nums_found[2])
+        window_server_side = int (nums_found[3])
         for command in commands_found:
             #print("COMMAND?", command, "\n\n")
             if command== "SYN":
@@ -352,6 +376,7 @@ class rdp:
             elif command=="DAT":
                 #call instance of PayloadManager
                 self.payload_manager.gather_payload(data)
+                self.sender_win(window_server_side)
             elif command=="FIN":
                 self.set_state("fin-rcv")
                 #send ACK for the Fin 
@@ -374,7 +399,7 @@ def main_loop():
         readable, writable, exceptional = select.select([sock], [sock], [])
         for s in readable:
             data, addr = sock.recvfrom(5000)
-            #print("Received ", data.decode())
+            print("Received ", data.decode() , "\n\n\n....................\n")
             rcv_buff.append(data)
             if rdp_obj.in_accordance(data): #checks the seq no
                 #print("into processing data.....")
@@ -382,7 +407,7 @@ def main_loop():
 
         while snd_buff:
             msg= str (snd_buff.pop(0)) 
-            #print("SENDING.....", msg)
+            print("SENDING.....", msg)
             sock.sendto(msg.encode(), (args.server_ip, args.server_udp_port))
 
         if rdp_obj.get_state()=="fin-sent" or rdp_obj.get_state == "rst_mode":
@@ -399,3 +424,7 @@ if __name__== "__main__":
     udp_sock_start(args.server_ip, args.server_udp_port)
     print("Client started")
     main_loop()
+
+
+
+
