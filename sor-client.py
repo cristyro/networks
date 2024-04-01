@@ -22,6 +22,9 @@ window_size = 0 #change to given by client
 files_to_write =[]
 payload_acc= "" #only modify when we need to accumulate payload 
 usual_length = 0
+multiple_req= None
+retransmit_buff = {}
+TIMEOUT_INTERVAL= 2
 
 
 def udp_sock_start(ip, port):
@@ -51,7 +54,7 @@ def parse_args():
 #total amount received 
 def write_http_request():
     global get_requests
-    global all_req
+    global all_req, multiple_req
     global files_to_write
     file_pairs = [(args.file_pairs[i], args.file_pairs[i+1]) for i in range(0, len(args.file_pairs), 2)]
 
@@ -63,6 +66,7 @@ def write_http_request():
             get_requests.append(request)
             files_and_len[read_file]= 0
             all_req.append(write_file)
+            multiple_req = True
             
     else:
         files_and_len[file_pairs[0][1]]= 0
@@ -100,6 +104,11 @@ class PayloadHandler:
         self.files_and_data[self.current_file]= data
         self.payload_acc=""
         self.expected_content_length= None
+        if multiple_req and len(all_req) ==0 :
+            print("last to close.....")
+            fin_client= packet("FIN", self.rdp_instance.current_seq, self.rdp_instance.current_ack,"")
+            snd_buff.append(fin_client)
+            self.rdp_instance.set_state("fin-sent")
 
 
     def select_payload(self, string_with_command, initial_payload):
@@ -359,6 +368,11 @@ class rdp:
             print("after acks , we have", len(self.window))
             self.current_ack = max (found_ack, self.current_seq) # this is what we found has been last acknowledge on the other side 
 
+        acked_seq_nums = [seq_num for seq_num in retransmit_buff if seq_num <= int(found_ack)]
+        for seqno in acked_seq_nums:
+            del retransmit_buff[seqno]
+
+
 
     #update you server of my current ack 
     def sender_win(self, window_on_server):
@@ -398,14 +412,24 @@ class rdp:
                 print("acknowledgment for last packet has:", str (ack_for_fin) )
                 snd_buff.append(ack_for_fin)
                 self.set_state("fin-sent") 
+
+
+def check_timeouts():
+        global retransmit_buff
+        current_time = time.time()
+        for seq_num, (pack, sent_time) in list(retransmit_buff.items()):
+            if current_time - sent_time > TIMEOUT_INTERVAL:
+                print(f"Retransmitting packet {seq_num}")
+                msg = str (pack)
+                sock.sendto(msg.encode(), (args.server_ip, args.server_udp_port))
                  
             
 def main_loop():
-    global snd_buff, rcv_buff, rdp
+    global snd_buff, rcv_buff, rdp, retransmit_buff
     rdp_obj.open()
 
     while True:
-        #print("In main loop")
+        check_timeouts()
         readable, writable, exceptional = select.select([sock], [sock], [])
         for s in readable:
             data, addr = sock.recvfrom(5000)
@@ -417,11 +441,15 @@ def main_loop():
                 rdp_obj.process_data(data)
 
         while snd_buff:
-            msg= str (snd_buff.pop(0)) 
+            pack = snd_buff.pop(0)
+            msg= str (pack)
+            current_time = time.time()
+            retransmit_buff[pack.seq_num] = (pack,current_time)
            # print("SENDING.....", msg)
             sock.sendto(msg.encode(), (args.server_ip, args.server_udp_port))
 
         if rdp_obj.get_state()=="fin-sent" or rdp_obj.get_state == "rst_mode":
+            #delete all retransmit buff here
             print("closing connection....")
             sock.close()
             break;
