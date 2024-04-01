@@ -28,6 +28,8 @@ clients= {} #keep instances of the rdp class
 sucess_message= {} #queue of successful messages
 sucess_req= {} #queue of successful requests
 
+TIMEOUT_INTERVAL = 2 #seconds
+
 
 #server process the http request and sends the response from the client !!!!!
 class packet:
@@ -174,9 +176,7 @@ class rdp:
                     self.pack_data(answ, True, False)
 
             elif not matches: #matches is now empty
-                print("going into line 177 in gather REQ......")
                 self.pack_data(answ,False, True)
-
             else:
                 self.pack_data(answ, False, False)
             
@@ -216,8 +216,10 @@ class rdp:
             self.send_rst()
             return False
         
+        elif "FIN" in command:
+            return False
         #release the sliding win 
-        elif "ACK" in command :
+        elif "ACK" in command:
             return True
 
         else:
@@ -299,8 +301,16 @@ class rdp:
         self.window =[]
         self.window = updated_list
         print("Updated length is :", self.win_available , "\n\n")
-    
 
+
+    #Upon ACKing removes those packets that have been acked and thus not needed to retransmit 
+    def update_retransmission(self):
+        global retransmit_buff
+        if self.connection_id in retransmit_buff:
+            for seq_no in list(retransmit_buff[self.connection_id].keys()):
+                if seq_no < self.current_ack : # If this packet seq_no is less than the received_ack then its acked and can remove
+                    del retransmit_buff[self.connection_id][seq_no] 
+    
     #Only here if we have an ACK
     #might have to add more states and transitions     
     #Returns false if ACK is in command and we want to stop parsing and skip to sending data to the client
@@ -324,6 +334,7 @@ class rdp:
                     self.win_available += missing
 
                 self.current_ack = received_ack
+                self.update_retransmission()
                 self.release_packets()
                 print ("\n----------------------------\n")
                 self.update_window()
@@ -442,6 +453,17 @@ def udp_sock_start(ip, port):
     sock.bind((ip , port))
     sock.setblocking(0)
 
+def check_timeouts():
+    current_time = time.time()
+    for connect_id, packets in retransmit_buff.items():
+        for seqno, (packet, send_time) in list(packets.items()):
+            if current_time - send_time > TIMEOUT_INTERVAL:
+                print(f"Retransmitting packet {seqno} for connection {connect_id}")
+                sock.sendto(str(packet).encode(), clients[connect_id].addr)
+                retransmit_buff[connect_id][seqno] = (packet, current_time)  # Update send time
+
+
+
 
 def main_loop():
     """
@@ -460,6 +482,7 @@ def main_loop():
 
     while True:
          # Select readable and writable sockets
+        check_timeouts()
         readable, writable, exceptional = select.select([sock], [sock], [sock], 100)
         for s in readable:
             data, addr = s.recvfrom(5000)
@@ -494,7 +517,8 @@ def main_loop():
                     print("SENDING....", msg)
                     print("\n\n\n -------7-7-7-7-7------------\n\n")
                     seq_no = msg.seq_num
-                    retransmit_buff[rdp_obj.connection_id][seq_no]= msg
+                    current_time = time.time ()
+                    retransmit_buff[rdp_obj.connection_id][seq_no]= (msg, current_time)
                     sock.sendto(str(msg).encode(), addr)
                     if ("SYN" in msg.command or "ACK" in msg.command):
                         break; 
