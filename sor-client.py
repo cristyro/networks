@@ -96,7 +96,6 @@ class PayloadHandler:
 
     #writes data to specific file and resets necessary variables
     def write_to_file(self, data):
-        print("writing to", self.current_file)
         with open(self.current_file, 'w') as file:
             file.write(data)
 
@@ -105,7 +104,6 @@ class PayloadHandler:
         self.payload_acc=""
         self.expected_content_length= None
         if multiple_req and len(all_req) ==0 :
-            print("last to close.....")
             fin_client= packet("FIN", self.rdp_instance.current_seq, self.rdp_instance.current_ack,"")
             snd_buff.append(fin_client)
             self.rdp_instance.set_state("fin-sent")
@@ -131,9 +129,9 @@ class PayloadHandler:
             return pay_wanted
 
     def check_and_write(self):
-        print("current file is :", self.current_file)
-        print("in check and write", self.expected_content_length, len(self.payload_acc), "Are equal?", len(self.payload_acc) == int(self.expected_content_length))
-        print( type(len(self.payload_acc)), type(self.expected_content_length)  )
+        #print("current file is :", self.current_file)
+        #print("in check and write", self.expected_content_length, len(self.payload_acc), "Are equal?", len(self.payload_acc) == int(self.expected_content_length))
+        #print( type(len(self.payload_acc)), type(self.expected_content_length)  )
         if len(self.payload_acc) == int(self.expected_content_length): 
             self.write_to_file(self.payload_acc) #In case we received extra data 
             self.expected_content_length= None #reset for next file 
@@ -143,7 +141,6 @@ class PayloadHandler:
         for part in string.split():
             if part.isnumeric():
                 num+=part
-        print(num)
         return num
 
     #Processes the given data, extracts content length if present, accumulates payload, and writes to file as necessary.
@@ -153,12 +150,12 @@ class PayloadHandler:
         # Regular expression to find content length and initial part of the payload
         pattern = r"Content Length: (\d+)\r?\n\r?\n([\s\S]*)"
         matches = re.search(pattern, data)
-        print("DATA we want to process :", matches)
-        print("\n\n\n\n ---------------------------")
+        #print("DATA we want to process :", matches)
+        #print("\n\n\n\n ---------------------------")
 
         if matches:
             file_in_order= all_req.pop(0)
-            print("servicing :", file_in_order)
+            #print("servicing :", file_in_order)
             self.set_file(file_in_order)
             content_len_str= matches.group(0)
             list_matches = content_len_str.split("\r\n\r\n")
@@ -167,11 +164,11 @@ class PayloadHandler:
             initial_payload = list_matches[1]
             content_len = self.get_number(content_len_str)
             self.expected_content_length = int (content_len)  # Set the expected content length
-            print("content len ", content_len_str)
+            #print("content len ", content_len_str)
 
             # Extract content length and initial payload from the data
-            print("-----------------------\n")
-            print("content length :", content_len)
+            #print("-----------------------\n")
+            #print("content length :", content_len)
 
             initial_payload = self.select_payload(initial_payload, True)
             if len(initial_payload)== int(content_len):
@@ -223,7 +220,6 @@ class rdp:
 
     def set_state(self, new_state):
         self.state= new_state
-        print(self.state)
 
     def get_state(self):
         return self.state
@@ -247,9 +243,7 @@ class rdp:
             return False
         else:
             # If outside this range, it may indicate an error or unexpected behavior, thus RST is considered
-            print("sending reset, you are fucked ")
             exit(1)
-            return True
 
     
     def send_rst(self):
@@ -275,7 +269,7 @@ class rdp:
                 self.last_received= seq
                 return True
             else:
-                print("Packet not in accordance with protocol. Expected sequence:", self.expected_seq)
+                #print("Packet not in accordance with protocol. Expected sequence:", self.expected_seq)
                 return False
            
         
@@ -350,7 +344,7 @@ class rdp:
             if self.window:
                 peek= self.window[0]
                 self.current_seq += peek.length  #peek next
-                print("added to snd_buff....", updated_packet)
+                #print("added to snd_buff....", updated_packet)
                 snd_buff.append(updated_packet)
 
     def manage_acks(self, found_ack, paylen):
@@ -365,7 +359,7 @@ class rdp:
             self.release_packets()
             #removes all the packets from the sliding window once they have been acked
             self.window = [p for p in self.window if p.seq_num > int(found_ack)]
-            print("after acks , we have", len(self.window))
+           #print("after acks , we have", len(self.window))
             self.current_ack = max (found_ack, self.current_seq) # this is what we found has been last acknowledge on the other side 
 
         acked_seq_nums = [seq_num for seq_num in retransmit_buff if seq_num <= int(found_ack)]
@@ -376,11 +370,11 @@ class rdp:
 
     #update you server of my current ack 
     def sender_win(self, window_on_server):
-        print("in sender win", int (window_on_server) )
+       #print("in sender win", int (window_on_server) )
         if int (window_on_server) == 0 or int  (window_on_server) <= usual_length: 
             #send an ACK 
             self.current_ack = self.last_received
-            print("sending ack to slide window -------ccccccc-------\n\n")
+            #print("sending ack to slide window -------ccccccc-------\n\n")
             ack_to_sender= packet("ACK", self.current_seq, self.current_ack, "")
 
             snd_buff.append(ack_to_sender)
@@ -409,7 +403,7 @@ class rdp:
                 #send ACK for the Fin 
                 self.current_ack=found_seq #acknowledge all packets up untill this seq no
                 ack_for_fin= packet("ACK|FIN", self.current_seq, self.current_ack, "")
-                print("acknowledgment for last packet has:", str (ack_for_fin) )
+                #print("acknowledgment for last packet has:", str (ack_for_fin) )
                 snd_buff.append(ack_for_fin)
                 self.set_state("fin-sent") 
 
@@ -419,9 +413,47 @@ def check_timeouts():
         current_time = time.time()
         for seq_num, (pack, sent_time) in list(retransmit_buff.items()):
             if current_time - sent_time > TIMEOUT_INTERVAL:
-                print(f"Retransmitting packet {seq_num}")
+                #print(f"Retransmitting packet {seq_num}")
                 msg = str (pack)
                 sock.sendto(msg.encode(), (args.server_ip, args.server_udp_port))
+
+#Prints logs for functions
+def log_event(event_type, packet):
+    current_time = time.strftime("%a %b %d %H:%M:%S %Z %Y", time.localtime())
+    command = f"Command: {packet.command}"
+    sequence = f"Sequence: {packet.seq_num}" if hasattr(packet, 'seq_num') else ""
+    ack = f"Acknowledgment: {packet.ack_num}" if hasattr(packet, 'ack_num') else ""
+    length = f"Length: {packet.length}" if hasattr(packet, 'length') else ""
+    window = f"Window: {window_size}"  # window_size is globally accessible
+
+    log_parts = [part for part in [command, sequence, ack, length, window] if part]
+    log = f"{current_time}: {event_type}; " + "; ".join(log_parts)
+    print(log)
+
+def parse_and_log(data):
+    command_pattern = r"Command: ([\w|]+)"
+    seq_pattern = r"Seq: (\d+)"
+    ack_pattern = r"Ack: (\d+)"
+    length_pattern = r"Length: (\d+)"
+    window_pattern = r"Window: (\d+)"
+
+    # Extracting values using regular expressions
+    command = re.search(command_pattern, data).group(1) if re.search(command_pattern, data) else ""
+    seq_num = int(re.search(seq_pattern, data).group(1)) if re.search(seq_pattern, data) else 0
+    ack_num = int(re.search(ack_pattern, data).group(1)) if re.search(ack_pattern, data) else 0
+    length = int(re.search(length_pattern, data).group(1)) if re.search(length_pattern, data) else 0
+    window = int(re.search(window_pattern, data).group(1)) if re.search(window_pattern, data) else 0
+
+    # Creating a temporary packet-like dictionary for logging
+    fake_payload = "6"*length
+    packet_info = packet(command, seq_num, ack_num, fake_payload)
+
+    # Log the received event
+    log_event("Receive", packet_info)
+
+    
+
+
                  
             
 def main_loop():
@@ -434,7 +466,9 @@ def main_loop():
         for s in readable:
             data, addr = sock.recvfrom(5000)
             data = data.decode()
-            print("Received ", data , "\n\n\n....................\n")
+            #maybe we are going to have to packetize data to print it 
+            parse_and_log(data)
+            #print("Received ", data , "\n\n\n....................\n")
             rcv_buff.append(data)
             if rdp_obj.in_accordance(data): #checks the seq no
                 #print("into processing data.....")
@@ -445,12 +479,12 @@ def main_loop():
             msg= str (pack)
             current_time = time.time()
             retransmit_buff[pack.seq_num] = (pack,current_time)
-           # print("SENDING.....", msg)
+            log_event("Send", pack)
             sock.sendto(msg.encode(), (args.server_ip, args.server_udp_port))
 
         if rdp_obj.get_state()=="fin-sent" or rdp_obj.get_state == "rst_mode":
             #delete all retransmit buff here
-            print("closing connection....")
+            #print("closing connection....")
             sock.close()
             break;
 
@@ -461,5 +495,4 @@ if __name__== "__main__":
     rdp_obj= rdp()
     write_http_request()
     udp_sock_start(args.server_ip, args.server_udp_port)
-    print("Client started")
     main_loop()
